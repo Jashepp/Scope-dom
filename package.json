@@ -1,0 +1,21 @@
+{
+  "name": "scope-dom",
+  "version": "0.0.1",
+  "description": "[Experimental] Declarative HTML logic & behaviour, with hierarchical scoping",
+  "main": ".",
+  "browser": {
+    "core": "./core/scope-dom-core.js"
+  },
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "server": "npx http-server ./ -c-1 -p 8181"
+  },
+  "author": "unchosen.aus@gmail.com",
+  "license": "copyright",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Jashepp/Scope-dom"
+  }
+}

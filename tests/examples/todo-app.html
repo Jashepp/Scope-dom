@@ -1,0 +1,132 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+	<title>scopeDom Example: TODO App</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link rel="preload" as="style" onload="this.rel='stylesheet'" href="https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300..800;1,300..800&display=swap">
+	<style type="text/css">
+		body { font-family:"Open Sans",sans-serif; font-style:normal; font-weight:330; font-variation-settings: "wdth" 100; font-optical-sizing:auto; }
+		body { margin:0; padding:0; font-size:16px; color:#111; }
+		*[flex=nogrow] { flex-grow:0; }
+		*[flex=grow] { flex-grow:100; }
+		*[nowrap] { white-space:nowrap; }
+		
+		html { height:100%; width:100%; background:#F0F0F0; }
+		body { min-height:100%; width:100%; overflow:auto; display:flex; flex-direction:column; flex-wrap:nowrap; justify-content:center; align-items:center; align-content:flex-start; }
+		#app { display:flex; flex-direction:column; flex-wrap:nowrap; justify-content:center; align-items:center; align-content:center; }
+		#app { min-width:min(max(90vw,500px),700px); max-width:min(max(90vw,700px),900px); margin:1rem; padding:1rem; border-radius:0.5rem; background:#FFF; box-shadow:rgba(0, 0, 0, 0.25) 0px 2px 4px 0px; }
+		#app > * { width:100%; display:flex; flex-direction:row; flex-wrap:nowrap; justify-content:space-between; align-items:center; align-content:center; }
+		#app button { padding:0.25rem 0.5rem; border-radius:0.25rem; font-size:1rem; line-height:1.2rem; border:solid 1px #BBB; background-color:#EEE; cursor:pointer; }
+		#app button:hover, #app button:focus { background-color:#DDD; }
+		
+		@media (max-width: 700px){
+			body { display:block; }
+		}
+		
+		#app ._title h2 { margin:0 0 1rem 0; text-align:center; }
+		#app ._input button { margin-left:0.5rem; padding:0.5rem 0.75rem; font-size:1.2rem; line-height:1.4rem; }
+		#app ._input input { padding:0.5rem; font-size:1.2rem; line-height:1.4rem; border:solid 1px #BBB; border-radius:0.25rem; }
+		#app ._header select { margin-left:0.5rem; padding:0.25rem; font-size:1.2rem; line-height:1.4rem; border:solid 1px #BBB; border-radius:0.25rem; }
+		#app ._list { display:flex; flex-direction:column; flex-wrap:wrap; justify-content:space-between; align-items:center; align-content:center; }
+		#app ._list { margin-top:1.5rem; }
+		#app ._list ._header { display:flex; flex-direction:row; flex-wrap:nowrap; justify-content:space-between; align-items:center; align-content:center; }
+		#app ._list ._header { width:100%; }
+		#app ._list ._header h4 { margin:0; }
+		#app ._list ._header button { margin-left:0.5rem; }
+		#app ._list ._items { display:flex; flex-direction:column; flex-wrap:wrap; justify-content:space-between; align-items:center; align-content:center; }
+		#app ._list ._items { width:100%; margin-top:0.5rem; border-top:solid 1px #CCC; border-bottom:solid 1px #CCC; }
+		#app ._items ._msg { padding:0.75rem; }
+		#app ._items ._item { display:flex; flex-direction:row; flex-wrap:nowrap; justify-content:space-between; align-items:center; align-content:center; }
+		#app ._items ._item { width:100%; padding:0.75rem 0; border-top:solid 1px #CCC; }
+		#app ._items ._item:hover { background:#F8F8F8; }
+		#app ._items ._item *:first-of-type { margin-left:0.5rem; }
+		#app ._items ._item *:last-of-type { margin-right:0.5rem; }
+		#app ._items ._item:first-of-type { border-top:none; }
+	</style>
+	<script type="text/javascript" src="/core/scope-dom-core.js"></script>
+	<script type="text/javascript" src="/plugins/attrib-cloak.js"></script>
+	<script type="text/javascript" src="/plugins/attrib-parse.js"></script>
+	<script type="text/javascript" src="/plugins/attrib-if.js"></script>
+	<script type="text/javascript" src="/plugins/attrib-repeat.js"></script>
+	<!-- <script type="module" src="/plugins/attrib-parse.js"></script>
+	<script type="module" src="/plugins/attrib-if.js"></script>
+	<script type="module" src="/plugins/attrib-repeat.js"></script> -->
+	<script type="text/javascript">
+		scopeDom.init({ globalContext:false, documentContext:true, documentDefaultView:false });
+		scopeDom.instance.scopeController(function({ scope:$scope, instance, controller }){
+			Object.assign($scope,{ Date, Promise:Promise.bind(window), setTimeout:setTimeout.bind(window), console })
+			let list = $scope.list = [];
+			$scope.done = 0;
+			$scope.order = 'date|+';
+			$scope.addToList = (str)=>{
+				list.push({ text:str, date:(new Date()).getTime() });
+				$scope.orderListBy($scope.order);
+			};
+			$scope.orderListBy = (opt)=>{
+				if(opt==='text|+') list.sort((a,b)=>a.text.localeCompare(b.text));
+				else if(opt==='text|-') list.sort((a,b)=>b.text.localeCompare(a.text));
+				else if(opt==='date|+') list.sort((a,b)=>new Date(a.date).toISOString().localeCompare(new Date(b.date).toISOString()));
+				else if(opt==='date|-') list.sort((a,b)=>new Date(b.date).toISOString().localeCompare(new Date(a.date).toISOString()));
+			};
+			if(localStorage){
+				let store = localStorage.getItem('sdc-example-todo-app-1');
+				let obj = store && JSON.parse(store);
+				if(obj && obj.list) list = $scope.list = obj.list;
+				if(obj && obj.list) $scope.done = obj.done;
+				if(obj && obj.list) $scope.order = obj.order;
+				$scope.$on('$update',async ()=>{ await 0; localStorage.setItem('sdc-example-todo-app-1',JSON.stringify({ list, done:$scope.done, order:$scope.order })); });
+			}
+			$scope.orderListBy($scope.order);
+		});
+	</script>
+</head>
+<body>
+	
+	<!-- <template $swap="div" id="app"> -->
+	<div id="app">
+		<div class="_title"><h2 flex="grow" nowrap>Example: TODO App</h2></div>
+		
+		<form class="_input" $on-submit:pd $on-submit:raf="if($$('input').value.trim().length>0){ addToList($$('input').value.trim()); $$('input').value=''; $update(); }">
+			<input flex="grow" type="search" placeholder="What needs to be done?" $init="$this.focus();" />
+			<button flex="nogrow" type="submit" $on-click="$previous.focus();" title="Add TODO Item">Add</button>
+		</form>
+		
+		<div class="_list">Loading...</div>
+		<div class="_list" $cloak:dom="loaded() && plugins('parse','if','repeat')" $cloak:on-show="$previous.remove()">
+			
+			<div class="_header" flex="grow" $if:dom="list?.length>0">
+				<h4 flex="nogrow" nowrap>Things to do: <span style="font-weight:normal;" $parse:text>{{list.length+' / '+(done+list.length)}}</span></h4>
+				<span flex="grow"></span>
+				<span flex="nogrow" $if:dom="list?.length>1" $cloak>Order:</span>
+				<select flex="nogrow" $init="$this.value=order" $if:dom="list?.length>1" $on-change:raf="orderListBy(order=$this.value);$update();" $cloak>
+					<option value="text|+">Text Ascending</option>
+					<option value="text|-">Text Descending</option>
+					<option value="date|+">Date Added Ascending</option>
+					<option value="date|-">Date Added Descending</option>
+				</select>
+			</div>
+			
+			<div class="_items" $if:dom="(list?.length||0)===0"><div class="_msg" id="noListItems" nowrap $parse:text $cloak>Nothing is on the list {{done>0?'anymore':'yet'}}.</div></div>
+			<div class="_items" $if-else:dom>
+				<template $repeat="list" $repeat:cache="5">
+					<div class="_item">
+						<span flex="grow" $parse:text>{{$item.text}}</span>
+						<span flex="nogrow" nowrap $parse:text>{{new Date($item.date).toISOString().substr(0,10)+' '+new Date($item.date).toISOString().substr(11,8)}}</span>
+						<button flex="nogrow" type="button" $on-click:raf="list.splice($index,1);done++;$update();" title="Remove TODO Item">✓</button>
+					</div>
+				</template>
+			</div>
+			<!-- <div $if="list?.length>0" style="margin-top:1rem;">
+				<button type="button" $if="!rItem" $on-click:raf="rItem=list.pop();$update();">Remove Last Item</button>
+				<button type="button" $if="rItem" $on-click:raf="list.push(rItem);rItem=null;$update();">Re-Add Last Item</button>
+			</div> -->
+			
+		</div>
+		
+	</div>
+	<!-- </template> -->
+	
+</body>
+</html>
