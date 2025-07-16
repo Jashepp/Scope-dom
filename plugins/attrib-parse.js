@@ -126,7 +126,7 @@
 				if(optParts.length<2 || optParts[0]!=='attrib') continue;
 				let name = optParts.slice(1).join('-');
 				parseAttribNames.add(name);
-				if(value.length>0){
+				if(value?.length>0){
 					let m = parseAttribsMap.get(element) || new Map();
 					m.set(name,{ exp:value, exec:null, original:null });
 					if(!parseAttribsMap.has(element)) parseAttribsMap.set(element,m);

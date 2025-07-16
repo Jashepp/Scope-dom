@@ -308,6 +308,7 @@
 				if(nameFull===void 0 || nameFull.length===0) continue;
 				let nameParts = this.__regexMatchAllFirstGroup(nameFull,this._options.attribRegexParts);
 				if(nameParts.length<=0) continue;
+				if(value?.length===0) value = null;
 				let isDefault = nameParts[0]==='default';
 				let nameKey = nameParts.join(' ');
 				if(nkAliases && nameKey in nkAliases) nameKey = nkAliases[nameKey];
