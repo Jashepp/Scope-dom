@@ -128,7 +128,7 @@
 				parseAttribNames.add(name);
 				if(value?.length>0){
 					let m = parseAttribsMap.get(element) || new Map();
-					m.set(name,{ exec:null, exp:value, original:null });
+					m.set(name,{ exec:null, signalObs:null, exp:value, original:null });
 					if(!parseAttribsMap.has(element)) parseAttribsMap.set(element,m);
 				}
 			}
@@ -137,12 +137,13 @@
 			let bindSafe = this._getAttribOption(plugInfo,attrib,attribOpts,'bind',false,false,false); // $parse:bind
 			let bindHTML = this._getAttribOption(plugInfo,attrib,attribOpts,'bind html',false,false,false); // $parse:bind-html
 			if(!(parseTree.value && !parseTree.isDefault) && !(parseText.value && !parseText.isDefault)){
-				if(bindSafe.value?.length>0) parseBindSafe = { exec:null, exp:bindSafe.value, original:element.textContent, ready:false };
-				else if(bindHTML.value?.length>0) parseBindHTML = { exec:null, exp:bindHTML.value, original:element.innerHTML, ready:false };
+				if(bindSafe.value?.length>0) parseBindSafe = { exec:null, signalObs:null, exp:bindSafe.value, original:element.textContent, ready:false };
+				else if(bindHTML.value?.length>0) parseBindHTML = { exec:null, signalObs:null, exp:bindHTML.value, original:element.innerHTML, ready:false };
 				if(parseBindSafe || parseBindHTML) this.elementChildExcludeText.add(element);
 			}
 			// State
 			let state = {
+				signalCtrl: elementScopeCtrl.ctrl.signalCtrl,
 				element, normalize:null, parseNodes:new Map(), parseAttribNames, parseAttribsMap, nodesPending:false, parsePending:false, isVisible:false,
 				options:{
 					parseTree:parseTree.value, parseText:parseText.value, onlyOnce:onlyOnce.value, updateEvent:updateEvent.value, updateDomEvent:updateDomEvent.value,
@@ -348,7 +349,7 @@
 							parseNode = document.createTextNode(expOuter);
 							nodes.push(parseNode);
 						}
-						parseNodes.set(parseNode,{ node:parseNode, exec:null, exp:expInner, original:expOuter, anchor:null, updateIndex:0, lastResult:expOuter });
+						parseNodes.set(parseNode,{ node:parseNode, exec:null, signalObs:null, exp:expInner, original:expOuter, anchor:null, updateIndex:0, lastResult:expOuter });
 						this.allParseTextNodes.add(parseNode);
 						//if(extraScopes) this.instance._elementExtraScopes.set(parseNode,extraScopes);
 					}
@@ -382,7 +383,7 @@
 					let exp, attribMap = parseAttribsMap.get(e);
 					if(expArr.length===1) exp = expArr[0];
 					else exp = `[${expArr.join(',')}].join('')`;
-					if(!attribMap.has(name)) attribMap.set(name,{ exec:null, exp, original:text, updateIndex:0 });
+					if(!attribMap.has(name)) attribMap.set(name,{ exec:null, signalObs:null, exp, original:text, updateIndex:0 });
 				}
 			}
 		}
@@ -396,6 +397,7 @@
 				node.data = obj.original;
 				obj.lastResult = obj.original;
 				if(obj.anchor && obj.anchor.parentNode) obj.anchor.remove();
+				obj.signalObs?.clear(); obj.signalObs = obj.exec = null;
 			}
 			if(this.allParseTextNodes.has(node)) this.allParseTextNodes.delete(node);
 			parseNodes.delete(node);
@@ -405,29 +407,50 @@
 			let obj = parseAttribsMap.get(element)?.get(name);
 			if(obj && (obj.original===void 0 || obj.original===null)) element.removeAttribute(name);
 			else if(obj) element.setAttribute(name,obj.original);
-			if(obj) parseAttribsMap.get(element)?.delete(name);
+			if(obj){
+				parseAttribsMap.get(element)?.delete(name);
+				obj.signalObs?.clear(); obj.signalObs = obj.exec = null;
+			}
 		}
 		_undoBindParse(state,element){
 			let { parseBindSafe, parseBindHTML } = state.options;
-			if(parseBindHTML) element.innerHTML = parseBindHTML.original;
-			else if(parseBindSafe) element.textContent = parseBindSafe.original;
+			if(parseBindHTML){
+				element.innerHTML = parseBindHTML.original;
+				parseBindHTML.signalObs?.clear(); parseBindHTML.signalObs = parseBindHTML.exec = null;
+			}
+			else if(parseBindSafe){
+				element.textContent = parseBindSafe.original;
+				parseBindSafe.signalObs?.clear(); parseBindSafe.signalObs = parseBindSafe.exec = null;
+			}
 		}
 		
-		_execExpression(element,node,exp){
-			return this.instance._elementExecExp(this.instance._elementScopeCtrl(node),exp,{ $node:node, $expression:exp, $parseRoot:element },{ silentHas:true, useReturn:true, run:false });
+		_execExpression(element,node,exp,signalObs){
+			let eCtrl = this.instance._elementScopeCtrl(node);
+			let exec = this.instance._elementExecExp(eCtrl,exp,{ $node:node, $expression:exp, $parseRoot:element },{ silentHas:true, useReturn:true, run:false });
+			if(signalObs) exec.runFn = signalObs.wrapRecorder(exec.runFn);
+			return exec;
 		}
 		
 		_runParseExpressions(state){
-			let { element, parseNodes, parseAttribsMap, isVisible, options } = state;
+			let { signalCtrl, element, parseNodes, parseAttribsMap, isVisible, options } = state;
 			let { onlyOnce, parseBindSafe, parseBindHTML, onVisible } = options;
 			// Text Nodes
 			for(let [n,obj] of parseNodes){
-				let result, { node, exp, exec, comment, updateIndex } = obj;
+				let result, { node, exp, exec, signalObs, comment, updateIndex } = obj;
 				if(!node.isConnected && !(comment && comment.isConnected)){ this._undoNodeParse(state,node); continue; }
 				if(exec && onlyOnce) continue;
 				if(onVisible && !isVisible){ if(updateIndex===0) result=options.defaultText; else continue; }
 				else{
-					if(!exec) exec = obj.exec = this._execExpression(element,node,exp);
+					if(!exec){
+						signalObs = obj.signalObs = signalCtrl.createObserver();
+						exec = obj.exec = this._execExpression(element,node,exp,signalObs);
+						signalObs.addListener(()=>{
+							let updateIndex = obj.updateIndex;
+							this.scopeDom.onceRAF(node,signalObs,()=>{
+								if(obj.updateIndex===updateIndex) this._updateTextNode(node,exec.runFn(),obj,state,updateIndex);
+							});
+						});
+					}
 					result = exec.runFn();
 				}
 				this._updateTextNode(node,result,obj,state,updateIndex);
@@ -436,32 +459,56 @@
 			for(let [node,attribMap] of parseAttribsMap){
 				if(!node.isConnected){ for(let [name,obj] of attribMap){ this._undoAttribParse(state,name); } continue; }
 				for(let [name,obj] of attribMap){
-					let { exp, exec, updateIndex } = obj;
+					let { exp, exec, signalObs, updateIndex } = obj;
 					if(exec && onlyOnce) continue;
 					if(onVisible && !isVisible) continue;
-					if(!exec) exec = obj.exec = this._execExpression(element,node,exp);
-					let result = exec.runFn();
-					this._updateAttribute(node,name,result,obj,state,updateIndex);
+					if(!exec){
+						signalObs = obj.signalObs = signalCtrl.createObserver();
+						exec = obj.exec = this._execExpression(element,node,exp,signalObs);
+						signalObs.addListener(()=>{
+							let updateIndex = obj.updateIndex;
+							this.scopeDom.onceRAF(node,signalObs,()=>{
+								if(obj.updateIndex===updateIndex) this._updateAttribute(node,name,exec.runFn(),obj,state,updateIndex);
+							});
+						});
+					}
+					this._updateAttribute(node,name,exec.runFn(),obj,state,updateIndex);
 				}
 			}
 			// Bind-Safe attribute
 			if(parseBindSafe && parseBindSafe.ready){
-				for(let { exec, exp, updateIndex } of [parseBindSafe]){
+				for(let { exec, exp, signalObs, updateIndex } of [parseBindSafe]){
 					if(exec && onlyOnce) continue;
 					if(onVisible && !isVisible) continue;
-					if(!exec) exec = parseBindSafe.exec = this._execExpression(element,element,exp);
-					let result = exec.runFn();
-					this._updateBind(element,false,result,parseBindSafe,state,updateIndex);
+					if(!exec){
+						signalObs = parseBindSafe.signalObs = signalCtrl.createObserver();
+						exec = parseBindSafe.exec = this._execExpression(element,element,exp,signalObs);
+						signalObs.addListener(()=>{
+							let updateIndex = parseBindSafe.updateIndex;
+							this.scopeDom.onceRAF(element,signalObs,()=>{
+								if(parseBindSafe.updateIndex===updateIndex) this._updateBind(element,false,exec.runFn(),parseBindSafe,state,updateIndex);
+							});
+						});
+					}
+					this._updateBind(element,false,exec.runFn(),parseBindSafe,state,updateIndex);
 				}
 			}
 			// Bind-HTML attribute
 			else if(parseBindHTML && parseBindHTML.ready){
-				for(let { exec, exp, updateIndex } of [parseBindHTML]){
+				for(let { exec, exp, signalObs, updateIndex } of [parseBindHTML]){
 					if(exec && onlyOnce) continue;
 					if(onVisible && !isVisible) continue;
-					if(!exec) exec = parseBindHTML.exec = this._execExpression(element,element,exp);
-					let result = exec.runFn();
-					this._updateBind(element,true,result,parseBindHTML,state,updateIndex);
+					if(!exec){
+						signalObs = parseBindHTML.signalObs = signalCtrl.createObserver();
+						exec = parseBindHTML.exec = this._execExpression(element,element,exp,signalObs);
+						signalObs.addListener(()=>{
+							let updateIndex = parseBindHTML.updateIndex;
+							this.scopeDom.onceRAF(element,signalObs,()=>{
+								if(parseBindHTML.updateIndex===updateIndex) this._updateBind(element,true,exec.runFn(),parseBindHTML,state,updateIndex);
+							});
+						});
+					}
+					this._updateBind(element,true,exec.runFn(),parseBindHTML,state,updateIndex);
 				}
 			}
 		}
