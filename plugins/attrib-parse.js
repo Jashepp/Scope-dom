@@ -128,7 +128,7 @@
 				parseAttribNames.add(name);
 				if(value?.length>0){
 					let m = parseAttribsMap.get(element) || new Map();
-					m.set(name,{ exp:value, exec:null, original:null });
+					m.set(name,{ exec:null, exp:value, original:null });
 					if(!parseAttribsMap.has(element)) parseAttribsMap.set(element,m);
 				}
 			}
@@ -306,7 +306,7 @@
 					for(let { name, value } of eTarget.attributes){
 						if(!parseAttribNames.has(name) || !this.scopeDom.regexTest(value,expRegex)) continue;
 						if(parseAttribsMap.get(eTarget)?.has(name)) continue;
-						attribs.add({ element:eTarget, name, value, updateIndex:0 });
+						attribs.add({ element:eTarget, name, value });
 						state.parsePending = true;
 					}
 				}
@@ -348,7 +348,7 @@
 							parseNode = document.createTextNode(expOuter);
 							nodes.push(parseNode);
 						}
-						parseNodes.set(parseNode,{ node:parseNode, exp:expInner, exec:null, original:expOuter, anchor:null, updateIndex:0, lastResult:expOuter });
+						parseNodes.set(parseNode,{ node:parseNode, exec:null, exp:expInner, original:expOuter, anchor:null, updateIndex:0, lastResult:expOuter });
 						this.allParseTextNodes.add(parseNode);
 						//if(extraScopes) this.instance._elementExtraScopes.set(parseNode,extraScopes);
 					}
@@ -382,7 +382,7 @@
 					let exp, attribMap = parseAttribsMap.get(e);
 					if(expArr.length===1) exp = expArr[0];
 					else exp = `[${expArr.join(',')}].join('')`;
-					if(!attribMap.has(name)) attribMap.set(name,{ exp, exec:null, original:text, updateIndex:0 });
+					if(!attribMap.has(name)) attribMap.set(name,{ exec:null, exp, original:text, updateIndex:0 });
 				}
 			}
 		}
@@ -420,6 +420,7 @@
 		_runParseExpressions(state){
 			let { element, parseNodes, parseAttribsMap, isVisible, options } = state;
 			let { onlyOnce, parseBindSafe, parseBindHTML, onVisible } = options;
+			// Text Nodes
 			for(let [n,obj] of parseNodes){
 				let result, { node, exp, exec, comment, updateIndex } = obj;
 				if(!node.isConnected && !(comment && comment.isConnected)){ this._undoNodeParse(state,node); continue; }
@@ -431,6 +432,7 @@
 				}
 				this._updateTextNode(node,result,obj,state,updateIndex);
 			}
+			// Element Attributes
 			for(let [node,attribMap] of parseAttribsMap){
 				if(!node.isConnected){ for(let [name,obj] of attribMap){ this._undoAttribParse(state,name); } continue; }
 				for(let [name,obj] of attribMap){
@@ -442,6 +444,7 @@
 					this._updateAttribute(node,name,result,obj,state,updateIndex);
 				}
 			}
+			// Bind-Safe attribute
 			if(parseBindSafe && parseBindSafe.ready){
 				for(let { exec, exp, updateIndex } of [parseBindSafe]){
 					if(exec && onlyOnce) continue;
@@ -451,6 +454,7 @@
 					this._updateBind(element,false,result,parseBindSafe,state,updateIndex);
 				}
 			}
+			// Bind-HTML attribute
 			else if(parseBindHTML && parseBindHTML.ready){
 				for(let { exec, exp, updateIndex } of [parseBindHTML]){
 					if(exec && onlyOnce) continue;

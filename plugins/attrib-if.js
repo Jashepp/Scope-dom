@@ -6,6 +6,9 @@
 	
 	const textNodeType = document.TEXT_NODE;
 	
+	const matchCasePromiseWaitSymbol = Symbol('pluginIf-matchCase-promise-wait');
+	const matchCasePromiseResultSymbol = Symbol('pluginIf-matchCase-promise-result');
+	
 	const matchCaseOperatorSymbol = Symbol('pluginIf-matchCaseScope-operator');
 	const matchCaseOperatorFn = (op,arr)=>{
 		let fn=_=>arr; fn[matchCaseOperatorSymbol]=op; return fn;
@@ -33,32 +36,18 @@
 			let { element, attribs } = plugInfo;
 			if(!element.isConnected) return;
 			if(element.nodeName==='TEMPLATE' && !isElementLoaded(element)){ instance.onElementLoaded(element,this.onConnect.bind(this,plugInfo)); return; }
-			let ifAttribNames = ['if','if else','if match','if case'], ifPassValueOptions = ['once','dom'];
-			let ifAttribs=[], repeatAttrib, buildAttrib;
+			let ifAttribNames = ['if','if else','if match','if case'];
+			let ifAttribs=new Map(), repeatAttrib, buildAttrib;
 			if(attribs?.size>0) for(let [attribName,attrib] of attribs){
 				let { nameKey } = attrib;
-				if(ifAttribNames.indexOf(nameKey)!==-1) ifAttribs.push(attrib);
+				if(ifAttribNames.indexOf(nameKey)!==-1) ifAttribs.set(nameKey,attrib);
 				else if(nameKey==='repeat') repeatAttrib = attrib;
 				else if(nameKey==='build') buildAttrib = attrib;
 			}
-			if(ifAttribs.length===0) return;
+			if(ifAttribs.size===0) return;
 			if(repeatAttrib && element.nodeName==='TEMPLATE') this._moveAttrib(plugInfo,repeatAttrib,'default repeat');
 			if(buildAttrib && element.nodeName==='TEMPLATE') this._moveAttrib(plugInfo,buildAttrib,'default build');
-			// Merge
-			let ifAttrib = null, ifAttribsValues = new Map();
-			for(let attrib of ifAttribs){
-				if(!attrib) continue;
-				ifAttribsValues.set(attrib.nameKey,instance._elementAttribFallbackOptionValue(attrib,ifPassValueOptions,false,false));
-				if(!ifAttrib){ ifAttrib = attrib; continue; }
-				if(attrib.options.size>0) ifAttrib.options = new Map([...ifAttrib.options,...attrib.options]);
-				if(ifAttrib.value?.length>0 && attrib.value?.length>0 && !(ifAttrib.nameKey==='if match' && attrib.nameKey==='if case') && !(ifAttrib.nameKey==='if case' && attrib.nameKey==='if match')) console.warn("pluginIf: Found multiple attribute values, ignoring "+ifAttrib.attribute+", using "+attrib.attribute+".");
-				if(ifAttrib.value===null || attrib.value?.length>0){
-					ifAttrib.attribute = attrib.attribute;
-					ifAttrib.nameParts = attrib.nameParts;
-					ifAttrib.value = attrib.value;
-				}
-			}
-			if(ifAttrib) this._setupIf(plugInfo,ifAttrib,ifAttribsValues);
+			this._setupIf(plugInfo,ifAttribs);
 		}
 		
 		_moveAttrib(plugInfo,targetAttrib,defaultAttribName){
@@ -154,42 +143,63 @@
 			}
 		}
 		
-		_setupIf(plugInfo,attrib,ifAttribsValues){
+		_setupIf(plugInfo,ifAttribs){
 			let { instance } = this;
-			let { element, elementScopeCtrl, attribs } = plugInfo;
-			let { isDefault, attribute, nameKey, nameParts, value:exp } = attrib;
+			let { element, elementScopeCtrl } = plugInfo;
 			let isTemplate = (element.nodeName==='TEMPLATE');
 			// Skip when existing state
 			if(this.stateMap.has(element)) return;
 			// Skip empty template
 			if(isTemplate && !(element.content?.childNodes?.length>0)) return console.warn("pluginIf: template has no content");
-			// Setup Options
-			let attribOpts = instance._elementAttribOptionsWithDefaults(element,attrib);
-			let ifValue = ifAttribsValues.has('if') ? ifAttribsValues.get('if') : false,
-			ifElseValue = ifAttribsValues.has('if else') ? ifAttribsValues.get('if else') : false,
-			ifMatchValue = ifAttribsValues.has('if match') ? ifAttribsValues.get('if match') : false,
-			ifCaseValue = ifAttribsValues.has('if case') ? ifAttribsValues.get('if case') : false;
-			let isOnlyMatch = (ifMatchValue?.length>0 && !(ifCaseValue?.length>0 || ifElseValue?.length>0 || ifValue?.length>0));
-			// Fallback value
-			if(!(exp?.length>0)) exp = instance._elementAttribFallbackOptionValue(attrib,['once','dom']);
+			// Value / Expression
+			let exp = null, expAttrib = null;
+			for(let [nameKey,attrib] of ifAttribs){
+				if(nameKey==='if' || nameKey==='if else' || nameKey==='if case'){
+					if(attrib.value?.length>0){ exp = attrib.value; expAttrib = attrib; }
+					if(expAttrib===null) expAttrib = attrib;
+				}
+			}
+			for(let [nameKey,attrib] of ifAttribs){
+				if(nameKey==='if' || nameKey==='if else' || nameKey==='if case'){
+					if(exp===null && !(attrib.value?.length>0)){
+						let value = attrib.value = instance._elementAttribFallbackOptionValue(attrib,['once','dom']);
+						if(value?.length>0){ exp = value; expAttrib = attrib; }
+					}
+				}
+				if(nameKey==='if match'){
+					attrib.value = instance._elementAttribFallbackOptionValue(attrib,['once']);
+				}
+			}
 			// Options
-			let onlyOnce = this._getAttribOption(plugInfo,attrib,attribOpts,'once',false,true,true); // $if:once
-			let domRemove = this._getAttribOption(plugInfo,attrib,attribOpts,'dom',false,true,true); // $if:dom or  $if:dom='exp' - same as $if='exp' $if:dom
-			//let domOnce = this._getAttribOption(plugInfo,attrib,attribOpts,'dom once',false,true,true); // $if:dom-once (both onlyOnce and domRemove)
-			let updateEvent = this._getAttribOption(plugInfo,attrib,attribOpts,'update scope','$update',false,true).value; // $if:update-scope='event', $emit('event')
-			let updateDomEvent = this._getAttribOption(plugInfo,attrib,attribOpts,'update dom','$update',false,true).value; // $if:update-dom='event', $emitDom('event')
-			let onShowEvent = this._getAttribOption(plugInfo,attrib,attribOpts,'on show',null,false,false).value; // $if:on-show='exp'
-			let onHideEvent = this._getAttribOption(plugInfo,attrib,attribOpts,'on hide',null,false,false).value; // $if:on-hide='exp'
-			let defaultValue = !!this._getAttribOption(plugInfo,attrib,attribOpts,'default',false,false,true).value; // $if:default='true' (fallback for promise)
-			// If Expression
-			if(ifMatchValue?.length>0 && ifMatchValue===exp) exp = null;
-			if(exp===null && ifCaseValue?.length>0) exp = ifCaseValue;
-			if(exp===null && ifElseValue?.length>0) exp = ifElseValue;
-			if(exp===null && ifValue?.length>0) exp = ifValue;
+			let attribOpts = new Map(), matchOpts = new Map();
+			for(let [nameKey,attrib] of ifAttribs){
+				if(nameKey==='if' || nameKey==='if else' || nameKey==='if case'){
+					let options = instance._elementAttribOptionsWithDefaults(element,attrib);
+					if(options.size>0) attribOpts = new Map([...attribOpts,...options]);
+				}
+				if(nameKey==='if match'){
+					matchOpts = instance._elementAttribOptionsWithDefaults(element,attrib);
+				}
+			}
+			// Attrib Values
+			let ifValue = ifAttribs.has('if') ? ifAttribs.get('if').value : false,
+			ifElseValue = ifAttribs.has('if else') ? ifAttribs.get('if else').value : false,
+			ifMatchValue = ifAttribs.has('if match') ? ifAttribs.get('if match').value : false,
+			ifCaseValue = ifAttribs.has('if case') ? ifAttribs.get('if case').value : false;
+			let isOnlyMatch = ((ifMatchValue?.length>0 || ifMatchValue===null) && !expAttrib);
+			// Options
+			let onlyOnce = instance._elementAttribParseOption(element,attribOpts,'once',{ default:false, emptyTrue:true, runExp:true }); // $if:once
+			let domRemove = instance._elementAttribParseOption(element,attribOpts,'dom',{ default:false, emptyTrue:true, runExp:true }); // $if:dom or  $if:dom='exp' - same as $if='exp' $if:dom
+			//let domOnce = instance._elementAttribParseOption(element,attribOpts,'dom once',{ default:false, emptyTrue:true, runExp:true }); // $if:dom-once (both onlyOnce and domRemove)
+			let updateEvent = instance._elementAttribParseOption(element,attribOpts,'update scope',{ default:'$update', emptyTrue:false, runExp:true }).value; // $if:update-scope='event', $emit('event')
+			let updateDomEvent = instance._elementAttribParseOption(element,attribOpts,'update dom',{ default:'$update', emptyTrue:false, runExp:true }).value; // $if:update-dom='event', $emitDom('event')
+			let onShowEvent = instance._elementAttribParseOption(element,attribOpts,'on show',{ default:null, emptyTrue:false, runExp:false }).value; // $if:on-show='exp'
+			let onHideEvent = instance._elementAttribParseOption(element,attribOpts,'on hide',{ default:null, emptyTrue:false, runExp:false }).value; // $if:on-hide='exp'
+			let defaultValue = instance._elementAttribParseOption(element,attribOpts,'default',{ default:false, emptyTrue:false, runExp:true }).value; // $if:default='true' (eg, promise)
 			// State
 			onlyOnce=(onlyOnce.value===true); domRemove=(domRemove.value===true); //domOnce=(domOnce.value===true);
 			let state = {
-				element, isOnlyMatch, ifValue, ifElseValue, ifMatchValue, ifCaseValue, depList:null,
+				element, isOnlyMatch, ifValue, ifElseValue, ifMatchValue, ifCaseValue, matchOpts, depList:null,
 				options:{ onlyOnce, domRemove, onShowEvent, onHideEvent, defaultValue },
 				showing:null, exec:null, execMatch:null, anchor:null, defaultDisplay:null, onShowExec:null, onHideExec:null, updateIndex:0,
 				isTemplate, tplNodes:null, tplAnchorStart:null, tplAnchorEnd:null, tplDefaultDisplay:null,
@@ -198,7 +208,7 @@
 			// Skip if only if-match (after state is set)
 			if(isOnlyMatch) return;
 			// Trigger Exec
-			let triggerExec = this._runIfExpressions.bind(this,plugInfo,attrib,state,exp);
+			let triggerExec = this._runIfExpressions.bind(this,plugInfo,expAttrib,state,exp);
 			// Add $if() to element & element context
 			elementScopeCtrl.execContext.$if = element.$if = triggerExec;
 			// Register Events
@@ -206,7 +216,7 @@
 			if(updateDomEvent?.length>0) this._registerEvent(element,elementScopeCtrl.$onDom(updateDomEvent,triggerExec,{ capture:true, passive:true },true));
 			// Continue when ready
 			instance.onReady(function onReadyPluginIf(){
-				this._runIfExpressions(plugInfo,attrib,state,exp);
+				this._runIfExpressions(plugInfo,expAttrib,state,exp);
 			}.bind(this),false);
 		}
 		
@@ -214,20 +224,7 @@
 			if(!this.eventMap.has(element)) this.eventMap.set(element,new Set());
 			this.eventMap.get(element).add(removeEvent);
 		}
-		_getAttribOption(plugInfo,attrib,attribOpts,optName,defaultValue=null,trueOnEmpty=false,runExp=false){
-			let { instance } = this;
-			let { elementScopeCtrl } = plugInfo;
-			let { isDefault, attribute, nameKey, nameParts, value } = attrib;
-			let optValue = defaultValue, opt = attribOpts.get(optName)
-			if(trueOnEmpty && (opt?.value==='' || opt?.value===null)) optValue = true;
-			else if(runExp && opt?.value?.length>0){
-				let { result } = instance._elementExecExp(elementScopeCtrl,opt.value,null,{ silentHas:true, useReturn:true });
-				if(typeof result!==void 0) optValue = result;
-				//else { console.warn('pluginIf: invalid result, expecting string,',result,attribOpts.get(optName)?.attribute,element); return false; }
-			}
-			else if(!runExp && opt?.value?.length>0) optValue = opt.value;
-			return { value:optValue, raw:opt?.value, attribOption:opt, isDefault };
-		}
+		
 		
 		_hasRanOnce(state){
 			let { exec, anchor, defaultDisplay, options:{ onlyOnce, domRemove } } = state;
@@ -238,15 +235,15 @@
 			if(!(exp?.length>0)) return null;
 			return this.instance._elementExecExp(plugInfo.elementScopeCtrl,exp,Object.assign({ $expression:exp },Object(extra)),{ silentHas:true, useReturn, run:false });
 		}
-		_runIfExpressions(plugInfo,attrib,state,exp,forceResult=null){
+		_runIfExpressions(plugInfo,attrib,state,exp,runMatch=true){
 			let { instance, isElementLoaded } = this;
 			let { element, elementScopeCtrl, attribs } = plugInfo;
 			let { ifValue, ifElseValue, ifMatchValue, ifCaseValue, options, depList, showing:wasShowing, exec, anchor, updateIndex, isTemplate } = state;
 			let { onShowEvent, onHideEvent } = options;
 			if(!this.stateMap.has(element)) return;
 			if(this._hasRanOnce(state)) return;
+			runMatch = runMatch!==false;
 			let result = null;
-			if(forceResult===true || forceResult===false) result = forceResult; // forceFalse can be event due to registered events
 			// Specified or Empty if-else or if-case
 			if(ifElseValue?.length>0 || ifElseValue===null || ifCaseValue?.length>0 || ifCaseValue===null){
 				if(!depList){
@@ -279,43 +276,61 @@
 				if(!exec) state.exec = exec = this._execExpression(plugInfo,exp,true,execExtra);
 				result = element.$ifResult = exec.runFn();
 			}
-			this._handleResult(plugInfo,attrib,state,exp,updateIndex,false,result);
+			this._handleResult(plugInfo,attrib,state,exp,updateIndex,runMatch,false,result);
 		}
 		
-		_handleResult(plugInfo,attrib,state,exp,updateIndex,isPromise,result){
-			let { ifValue, ifElseValue, ifMatchValue, ifCaseValue, isTemplate, execMatch } = state;
+		_handleResult(plugInfo,attrib,state,exp,updateIndex,runMatch,updateOthers,result){
+			let { ifValue, ifElseValue, ifMatchValue, ifCaseValue, isTemplate, execMatch, options:{ matchOnce, defaultValue } } = state;
 			// Ignore old results
 			if(state.updateIndex>updateIndex) return;
 			// If result is promise, use default & handleResult when settled
 			if(result instanceof Promise){
 				// Fallback / Default Value
-				this._handleResult(plugInfo,attrib,state,exp,updateIndex,false,state.defaultValue);
+				this._handleResult(plugInfo,attrib,state,exp,updateIndex,runMatch,false,defaultValue);
 				updateIndex = state.updateIndex;
 				// Handle Result
-				this.scopeDom.promiseToRAF(result,this._handleResult.bind(this,plugInfo,attrib,state,exp,updateIndex,true));
+				this.scopeDom.promiseToRAF(result,this._handleResult.bind(this,plugInfo,attrib,state,exp,updateIndex,false,true));
 				return;
 			}
-			// if isPromise, check depList
-			if(isPromise && state.depList) for(let eState of state.depList) if(eState.showing){ result=false; ifElseValue=false; ifCaseValue=false; break; }
+			// force updateOthers if match result is a promise
+			if(!updateOthers && execMatch?.result instanceof Promise && matchCasePromiseResultSymbol in execMatch.result) updateOthers = true;
+			// if updateOthers, check depList
+			if(updateOthers && state.depList) for(let eState of state.depList) if(eState.showing){ result=false; ifElseValue=false; ifCaseValue=false; break; }
 			// Handle if-match & if-case
 			if(ifCaseValue?.length>0 && ifCaseValue===exp){
-				let ifMatch = null, matchElement = state.element, matchResult = null;
-				if(execMatch===null && state.depList) for(let eState of [state,...state.depList]){
-					if(eState.execMatch) execMatch = eState.execMatch;
+				let ifMatch = null, matchElement = state.element, matchResult = null, matchOpts = new Map();
+				if(!execMatch && state.depList) for(let eState of [state,...state.depList]){
+					if(!execMatch && eState.execMatch) execMatch = state.execMatch = eState.execMatch;
 					if(eState.ifMatchValue?.length>0){
 						ifMatch = eState.ifMatchValue;
 						matchElement = eState.element;
+						if(state.matchOpts.size>0) matchOpts = new Map([...matchOpts,...state.matchOpts]);
 					}
 				}
-				if(execMatch===null){
+				let matchOnce = this.instance._elementAttribParseOption(matchElement,matchOpts,'once',{ default:false, emptyTrue:true, runExp:true }).value; // $if-match:once
+				let firstRun = false;
+				if(!execMatch){
+					firstRun = true;
 					if(ifMatch===null) ifMatch = `this`;
-					state.execMatch = execMatch = this.instance._elementExecExp(this.instance._elementScopeCtrl(matchElement),ifMatch,{ $expression:ifMatch },{ silentHas:true, useReturn:true, run:true, fnThis:null }); // fnThis:null sets 'this' as proxy
-					matchResult = execMatch.result;
+					execMatch = state.execMatch = this.instance._elementExecExp(this.instance._elementScopeCtrl(matchElement),ifMatch,{ $expression:ifMatch },{ silentHas:true, useReturn:true, run:false, fnThis:null }); // fnThis:null sets 'this' as proxy
 				}
-				else execMatch.result = matchResult = execMatch.runFn();
-				if(matchResult instanceof Promise){
-					console.warn("pluginIf: if-match promise not implemented");
-					matchResult = state.defaultValue;
+				matchResult = execMatch.result;
+				if(execMatch.result instanceof Promise && matchCasePromiseResultSymbol in execMatch.result) matchResult = execMatch.result[matchCasePromiseResultSymbol];
+				if(execMatch.result instanceof Promise && execMatch.result?.[matchCasePromiseWaitSymbol]) matchResult = defaultValue;
+				else if(firstRun || (runMatch!==false && !matchOnce)){
+					console.log({ firstRun, runMatch, matchOnce });
+					matchResult = execMatch.result = execMatch.runFn();
+					if(execMatch.result instanceof Promise && matchCasePromiseResultSymbol in execMatch.result) matchResult = execMatch.result[matchCasePromiseResultSymbol];
+					else if(execMatch.result instanceof Promise && execMatch.result?.[matchCasePromiseWaitSymbol]) matchResult = defaultValue;
+					else if(execMatch.result instanceof Promise){
+						matchResult = defaultValue;
+						execMatch.result[matchCasePromiseWaitSymbol] = true;
+						this.scopeDom.promiseToRAF(execMatch.result,(pResult)=>{
+							execMatch.result[matchCasePromiseWaitSymbol] = false;
+							execMatch.result[matchCasePromiseResultSymbol] = pResult;
+							this._runIfExpressions(plugInfo,attrib,state,exp,false);
+						});
+					}
 				}
 				// Check Match Case
 				if(result!==false) result = this._matchCase(matchResult,result);
@@ -323,8 +338,8 @@
 			// Continue with result
 			if(isTemplate) this._handleTemplateIfResult(plugInfo,attrib,state,exp,updateIndex,result);
 			else this._handleRegularIfResult(plugInfo,attrib,state,exp,updateIndex,result);
-			// if isPromise, update remaining if elements
-			if(isPromise && !(ifElseValue===null || ifCaseValue===null)){
+			// if updateOthers, update remaining if elements
+			if(updateOthers && !(ifElseValue===null || ifCaseValue===null)){
 				let anyShowing = !!state.showing;
 				for(let e=state.element.nextSibling; e; e=e.nextSibling){
 					let isEl=e instanceof Element, eState=this.stateMap.get(e);
@@ -333,7 +348,7 @@
 					if(eState){
 						if(e===eState.tplAnchorStart && eState.tplAnchorEnd){ e = eState.tplAnchorEnd; continue; }
 						if(!eState.depList?.has(state)) break;
-						eState.element?.$if?.(anyShowing?false:null);
+						eState.element?.$if?.(false);
 					}
 				}
 			}
