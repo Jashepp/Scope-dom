@@ -184,7 +184,11 @@
 			}
 		}
 		handleScopeCtrlFn(proxy,fn){
-			return fn.apply(proxy,[{ scope:proxy, instance:this, controller:this.controller }]);
+			let signal = this.controller.$signal.bind(this.controller); // signal(value) : [get,set,signal]
+			let createSignal = this.controller.$createSignal.bind(this.controller); // createSignal(value) : signalInstance
+			let assignSignal = this.controller.$assignSignal.bind(this.controller); // assignSignal(obj,prop,value=void 0,descriptor=null) : signalInstance
+			let assignSignals = this.controller.$assignSignals.bind(this.controller); // assignSignals(target,source)
+			return fn.apply(proxy,[{ scope:proxy, instance:this, controller:this.controller, signal, createSignal, assignSignal, assignSignals }]);
 		}
 		
 		// Element Scanning & Watching
@@ -917,13 +921,145 @@
 		
 		static _getResolve(target,propertyKey,receiver){
 			let value = Reflect.get(target,propertyKey,receiver);
+			if(value instanceof signalInstance) return value.get();
 			return value;
 		}
 		
 		static _setResolve(target,propertyKey,value,receiver){
+			let descriptor = Object.getOwnPropertyDescriptor(target,propertyKey);
+			if(descriptor?.value instanceof signalInstance) return descriptor.value.set(value);
+			else if(descriptor?.set?.[signalSymb] instanceof signalInstance) return descriptor.set(value);
 			return Reflect.set(target,propertyKey,value,receiver);
 		}
 		
+	}
+	
+	class signalController {
+		constructor(scopeCtrl){
+			if(scopeCtrl instanceof scopeElementController) scopeCtrl = scopeCtrl.ctrl;
+			this.scopeCtrl = scopeCtrl;
+			this.observers = new Set();
+			this.observersRecording = new Set();
+		}
+		createObserver(){ let o=new signalObserver(this); this.observers.add(o); return o; }
+		removeObserver(observer,clear=true){
+			this.observers.delete(observer); this.observersRecording.delete(observer);
+			if(clear) observer.clear();
+		}
+		createSignal(value){ let s=new signalInstance(this,value); this.triggerRecording(s); return s; }
+		triggerChange(signal,value){
+			for(let observer of this.observers){
+				if(observer._hasSignal(signal)) observer._triggerChange(signal);
+			}
+		}
+		triggerRecording(signal){
+			for(let observer of this.observersRecording){
+				if(!observer._hasSignal(signal)) observer._addSignal(signal);
+			}
+		}
+		onSet(signal,oldValue,newValue){ this.triggerChange(signal,newValue); }
+		onGet(signal,value){ this.triggerRecording(signal); }
+		onPromiseResolve(signal,promise,value){ this.triggerChange(signal,promise); }
+		onPromiseReject(signal,promise,value){ this.triggerChange(signal,promise); }
+	}
+	
+	class signalObserver {
+		constructor(signalCtrl){
+			this.ctrl = signalCtrl;
+			this.signals = new WeakSet();
+			this.listeners = new Set();
+			this.isRecording = false;
+			this.isChanging = false;
+			this.hasChanged = false;
+		}
+		_hasSignal(signal){ return this.signals.has(signal); }
+		_addSignal(signal){ this.signals.add(signal); }
+		_triggerChange(signal){
+			if(this.isRecording) return;
+			this.hasChanged = true;
+			if(this.isChanging || this.listeners.size===0) return;
+			this.isChanging = true;
+			let self = this;
+			function signalObserverTrigger(fn){ fn(self,signal); };
+			for(let fn of this.listeners) try{ signalObserverTrigger(fn); }catch(err){ console.error(err); }
+			this.isChanging = false;
+		}
+		startRecording(){
+			if(this.isRecording) return;
+			this.isRecording = true;
+			this.ctrl.observersRecording.add(this);
+		}
+		stopRecording(){
+			if(!this.isRecording) return;
+			this.isRecording = false;
+			this.ctrl.observersRecording.delete(this);
+		}
+		wrapRecorder(fn){
+			let self = this;
+			return function signalObserverWrapper(){
+				self.startRecording();
+				let result; try{ result=fn(); }catch(err){ console.error(err); }
+				self.stopRecording();
+				return result;
+			};
+		}
+		consumeHasChanged(){ let r=this.hasChanged; this.hasChanged=false; return r; }
+		addListener(fn){ this.listeners.add(fn); return this.removeListener.bind(this,fn); }
+		removeListener(fn){ this.listeners.delete(fn); }
+		clear(){ this.listeners.clear(); this.signals=new WeakSet(); }
+	}
+	
+	const signalSymb = Symbol('$signalInstance');
+	class signalInstance {
+		#ctrl; #value; #promise; #isGetting=true; #isSetting=true;
+		constructor(signalCtrl,value){
+			this.#ctrl=signalCtrl;
+			this.#setFn(value);
+			this.#isGetting = this.#isSetting = false;
+		}
+		#setFn(v){
+			let oldV = this.#value, oldP = this.#promise;
+			if(v===oldV) return;
+			this.#value = v;
+			let isP = (v instanceof Promise || typeof v?.then==="function");
+			if(!isP && oldP!==void 0) this.#promise = void 0;
+			if(isP && oldP!==v){
+				this.#promise = v;
+				v.then(this.#ctrl.onPromiseResolve.bind(this.#ctrl,this,v),this.#ctrl.onPromiseReject.bind(this.#ctrl,this,v));
+			}
+		}
+		markChanged(){ this.#ctrl.triggerChange(this,this.#value); }
+		get = function signalGet(){
+			if(this.#isGetting) return this.#value;
+			this.#isGetting = true;
+			this.#ctrl.onGet(this,this.#value);
+			this.#isGetting = true;
+			return this.#value;
+		}
+		set = function signalSet(v){
+			if(this.#isSetting) return;
+			let old=this.#value;
+			if(v===old) return;
+			this.#setFn(v);
+			this.#isSetting = true;
+			this.#ctrl.onSet(this,old,v);
+			this.#isSetting = false;
+		}
+		get value(){ return this.get(); }
+		set value(v){ this.set(v); }
+		get toString(){ let v=this.get(); return v?.toString?.bind(v); }
+		get toLocaleString(){ let v=this.get(); return v?.toLocaleString?.bind(v); }
+		get toJSON(){ let v=this.get(); return v?.toJSON?.bind(v); }
+		valueOf(){ return this.get(); }
+		then(fn){ return fn(this.get()); }
+		get [Symbol.toStringTag](){ return this.get()?.[Symbol.toStringTag] || "ScopeDom.signalInstance"; }
+		[Symbol.toPrimitive](hint){
+			let v=this.get(), fn=v?.[Symbol.toPrimitive];
+			if(fn) return fn(hint);
+			if(hint==='default') return ''+v;
+			if(hint==='string') return `${v}`;
+			if(hint==='number') return +v;
+		}
 	}
 	
 	const scSymb = Symbol('$scopeControllerContext');
@@ -942,6 +1078,7 @@
 		$onTarget(target,name,listener,options={},returnRemove=false){ return this[scSymb].$onTarget(target,name,listener,options,returnRemove); };
 		$onceTarget(target,name,listener,options={},returnRemove=false){ return this[scSymb].$onceTarget(target,name,listener,options,returnRemove); };
 		$emitTarget(target,name,detail=null,options=null){ return this[scSymb].$emitTarget(target,name,detail,options); };
+		$signal(value=void 0){ return this[scSymb].signalCtrl.createSignal(value); } // signalInstance
 	}
 	
 	class scopeController {
@@ -959,6 +1096,7 @@
 			this.scope = new scopeInstance(scopeObj,this);
 			this.execContext = new scopeControllerContext(this);
 			this.isDuringUpdate = false;
+			this.signalCtrl = scopeDomInstance?.controller?.signalCtrl || parentCtrl?.signalCtrl || new signalController(this);
 		}
 		
 		$emitScopeUpdate(suffix=''){
@@ -1015,6 +1153,23 @@
 			options = Object.assign({ detail:detail, bubbles:false, cancelable:false, composed:true },Object(options));
 			return target.dispatchEvent(new CustomEvent(name,options));
 		}
+		
+		$createSignal(value=void 0){ return this.signalCtrl.createSignal(value); } // signalInstance
+		
+		$assignSignal(obj,prop,value=void 0,descriptor=null){
+			let s = value instanceof signalInstance ? value : this.signalCtrl.createSignal(value);
+			let sGet = s.get.bind(s), sSet = s.set.bind(s); sGet[signalSymb] = sSet[signalSymb] = s;
+			descriptor = Object.assign({ configurable:true, enumerable:true },Object(descriptor),{ get:sGet, set:sSet });
+			Object.defineProperty(obj,prop,descriptor);
+			return s;
+		}
+		
+		$assignSignals(target,source){
+			for(let [key,val] of Object.entries(source)) this.$assignSignal(target,key,val);
+			return target;
+		}
+		
+		$signal(value=void 0){ let s=this.signalCtrl.createSignal(value); return [s.get.bind(s),s.set.bind(s),s]; } // [getFn,setFn,signalInstance]
 		
 	}
 	
@@ -1203,6 +1358,9 @@
 		scopeBase,
 		execExpression,
 		execExpressionProxy,
+		signalController,
+		signalObserver,
+		signalInstance,
 		scopeController,
 		scopeElementContext,
 		scopeElementController,
