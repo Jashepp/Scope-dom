@@ -185,10 +185,11 @@
 		}
 		handleScopeCtrlFn(proxy,fn){
 			let signal = this.controller.$signal.bind(this.controller); // signal(value) : [get,set,signal]
-			let createSignal = this.controller.$createSignal.bind(this.controller); // createSignal(value) : signalInstance
-			let assignSignal = this.controller.$assignSignal.bind(this.controller); // assignSignal(obj,prop,value=void 0,descriptor=null) : signalInstance
-			let assignSignals = this.controller.$assignSignals.bind(this.controller); // assignSignals(target,source)
-			return fn.apply(proxy,[{ scope:proxy, instance:this, controller:this.controller, signal, createSignal, assignSignal, assignSignals }]);
+			let signalCtrl = this.controller.signalCtrl, signalMethods = Object.fromEntries(
+				['createSignal','defineSignal','assignSignals','computeSignal','useSignals']
+				.map(k=>[k,signalCtrl[k].bind(signalCtrl)])
+			);
+			return fn.apply(proxy,[{ scope:proxy, instance:this, controller:this.controller, signal, ...signalMethods }]);
 		}
 		
 		// Element Scanning & Watching
@@ -921,7 +922,7 @@
 		
 		static _getResolve(target,propertyKey,receiver){
 			let value = Reflect.get(target,propertyKey,receiver);
-			if(value instanceof signalInstance) return value.get();
+			// if(value instanceof signalInstance) return value.get();
 			return value;
 		}
 		
@@ -946,42 +947,61 @@
 			this.observers.delete(observer); this.observersRecording.delete(observer);
 			if(clear) observer.clear();
 		}
-		createSignal(value){ let s=new signalInstance(this,value); this.triggerRecording(s); return s; }
 		triggerChange(signal,value){
-			for(let observer of this.observers){
-				if(observer._hasSignal(signal)) observer._triggerChange(signal);
-			}
+			for(let observer of this.observers) if(observer.hasSignal(signal)) observer.triggerChange(signal);
 		}
 		triggerRecording(signal){
-			for(let observer of this.observersRecording){
-				if(!observer._hasSignal(signal)) observer._addSignal(signal);
-			}
+			for(let observer of this.observersRecording) if(!observer.hasSignal(signal)) observer.recordSignal(signal);
 		}
-		onSet(signal,oldValue,newValue){ this.triggerChange(signal,newValue); }
-		onGet(signal,value){ this.triggerRecording(signal); }
-		onPromiseResolve(signal,promise,value){ this.triggerChange(signal,promise); }
-		onPromiseReject(signal,promise,value){ this.triggerChange(signal,promise); }
+		getCurrentRecording(){ return [...this.observersRecording]; }
+		// Signal Helper Methods
+		createSignal(value){ let s=new signalInstance(this,value); this.triggerRecording(s); return s; }
+		defineSignal(obj,prop,value=void 0,descriptor=null){
+			let s = value instanceof signalInstance ? value : this.createSignal(value);
+			let sGet = s.get.bind(s), sSet = s.set.bind(s); sGet[signalSymb] = sSet[signalSymb] = s;
+			descriptor = { __proto__:null, configurable:true, enumerable:true, ...descriptor, get:sGet, set:sSet };
+			Object.defineProperty(obj,prop,descriptor);
+			return s;
+		}
+		assignSignals(target,source){
+			for(let [key,val] of Object.entries(source)) this.defineSignal(target,key,val);
+			return target;
+		}
+		computeSignal(fn){ // [ signal, observer, clear() ]
+			let signal = this.createSignal(void 0);
+			let obs = this.createObserver();
+			obs.signalsIgnore.add(signal);
+			let viewFn = obs.wrapRecorder(fn);
+			let runFn = function signalComputeFn(obs,trigger,value){ try{ signal.set(viewFn(trigger)); }catch(err){ console.error(err); } };
+			obs.addListener(runFn);
+			runFn();
+			return [ signal, obs, obs.clear.bind(obs) ];
+		}
+		useSignals(...signals){
+			for(let i=0,l=signals.length; i<l && signals[i] instanceof signalInstance; i++) this.triggerRecording(signals[i]);
+		}
 	}
 	
 	class signalObserver {
 		constructor(signalCtrl){
 			this.ctrl = signalCtrl;
 			this.signals = new WeakSet();
+			this.signalsIgnore = new WeakSet();
 			this.listeners = new Set();
 			this.isRecording = false;
 			this.isChanging = false;
 			this.hasChanged = false;
 		}
-		_hasSignal(signal){ return this.signals.has(signal); }
-		_addSignal(signal){ this.signals.add(signal); }
-		_triggerChange(signal){
-			if(this.isRecording) return;
+		hasSignal(signal){ return this.signals.has(signal); }
+		recordSignal(signal){ if(!this.signals.has(signal) && !this.signalsIgnore.has(signal)) this.signals.add(signal); }
+		triggerChange(signal,value){
+			if(this.isRecording || !this.signals.has(signal)) return;
 			this.hasChanged = true;
 			if(this.isChanging || this.listeners.size===0) return;
 			this.isChanging = true;
 			let self = this;
-			function signalObserverTrigger(fn){ fn(self,signal); };
-			for(let fn of this.listeners) try{ signalObserverTrigger(fn); }catch(err){ console.error(err); }
+			function signalObserverTrigger(fn){ try{ fn(self,signal,value); }catch(err){ console.error(err); } };
+			for(let fn of this.listeners) signalObserverTrigger(fn);
 			this.isChanging = false;
 		}
 		startRecording(){
@@ -996,9 +1016,9 @@
 		}
 		wrapRecorder(fn){
 			let self = this;
-			return function signalObserverWrapper(){
+			return function signalObserverWrapper(...args){
 				self.startRecording();
-				let result; try{ result=fn(); }catch(err){ console.error(err); }
+				let result; try{ result=fn(...args); }catch(err){ console.error(err); }
 				self.stopRecording();
 				return result;
 			};
@@ -1018,31 +1038,30 @@
 			this.#isGetting = this.#isSetting = false;
 		}
 		#setFn(v){
-			let oldV = this.#value, oldP = this.#promise;
-			if(v===oldV) return;
+			if(v===this.#value) return;
 			this.#value = v;
+			let oldP = this.#promise;
 			let isP = (v instanceof Promise || typeof v?.then==="function");
 			if(!isP && oldP!==void 0) this.#promise = void 0;
 			if(isP && oldP!==v){
 				this.#promise = v;
-				v.then(this.#ctrl.onPromiseResolve.bind(this.#ctrl,this,v),this.#ctrl.onPromiseReject.bind(this.#ctrl,this,v));
+				v.then(this.#ctrl.triggerChange.bind(this.#ctrl,this,v),this.#ctrl.triggerChange.bind(this.#ctrl,this,v));
 			}
 		}
 		markChanged(){ this.#ctrl.triggerChange(this,this.#value); }
 		get = function signalGet(){
 			if(this.#isGetting) return this.#value;
 			this.#isGetting = true;
-			this.#ctrl.onGet(this,this.#value);
-			this.#isGetting = true;
+			this.#ctrl.triggerRecording(this);
+			this.#isGetting = false;
 			return this.#value;
 		}
 		set = function signalSet(v){
 			if(this.#isSetting) return;
-			let old=this.#value;
-			if(v===old) return;
+			if(v===this.#value) return;
 			this.#setFn(v);
 			this.#isSetting = true;
-			this.#ctrl.onSet(this,old,v);
+			this.#ctrl.triggerChange(this,v);
 			this.#isSetting = false;
 		}
 		get value(){ return this.get(); }
@@ -1056,7 +1075,7 @@
 		[Symbol.toPrimitive](hint){
 			let v=this.get(), fn=v?.[Symbol.toPrimitive];
 			if(fn) return fn(hint);
-			if(hint==='default') return ''+v;
+			if(hint==='default') return v;
 			if(hint==='string') return `${v}`;
 			if(hint==='number') return +v;
 		}
@@ -1078,7 +1097,7 @@
 		$onTarget(target,name,listener,options={},returnRemove=false){ return this[scSymb].$onTarget(target,name,listener,options,returnRemove); };
 		$onceTarget(target,name,listener,options={},returnRemove=false){ return this[scSymb].$onceTarget(target,name,listener,options,returnRemove); };
 		$emitTarget(target,name,detail=null,options=null){ return this[scSymb].$emitTarget(target,name,detail,options); };
-		$signal(value=void 0){ return this[scSymb].signalCtrl.createSignal(value); } // signalInstance
+		$signal(value=void 0){ return this[scSymb].$createSignal(value); } // signalInstance
 	}
 	
 	class scopeController {
@@ -1154,22 +1173,17 @@
 			return target.dispatchEvent(new CustomEvent(name,options));
 		}
 		
+		$signal(value=void 0){ let s=this.signalCtrl.createSignal(value); return [s.get.bind(s),s.set.bind(s),s]; } // [getFn,setFn,signalInstance]
+		
 		$createSignal(value=void 0){ return this.signalCtrl.createSignal(value); } // signalInstance
 		
-		$assignSignal(obj,prop,value=void 0,descriptor=null){
-			let s = value instanceof signalInstance ? value : this.signalCtrl.createSignal(value);
-			let sGet = s.get.bind(s), sSet = s.set.bind(s); sGet[signalSymb] = sSet[signalSymb] = s;
-			descriptor = Object.assign({ configurable:true, enumerable:true },Object(descriptor),{ get:sGet, set:sSet });
-			Object.defineProperty(obj,prop,descriptor);
-			return s;
-		}
+		$defineSignal(obj,prop,value=void 0,descriptor=null){ return this.signalCtrl.defineSignal(obj,prop,value,descriptor); } // signalInstance
 		
-		$assignSignals(target,source){
-			for(let [key,val] of Object.entries(source)) this.$assignSignal(target,key,val);
-			return target;
-		}
+		$assignSignals(target,source){ return this.signalCtrl.assignSignals(target,source); } // target
 		
-		$signal(value=void 0){ let s=this.signalCtrl.createSignal(value); return [s.get.bind(s),s.set.bind(s),s]; } // [getFn,setFn,signalInstance]
+		$computeSignal(fn){ return this.signalCtrl.computeSignal(fn); } // [ signal, observer, clear() ]
+		
+		$useSignals(...signals){ return this.signalCtrl.useSignals(...signals); }
 		
 	}
 	

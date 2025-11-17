@@ -434,6 +434,7 @@
 		_runParseExpressions(state){
 			let { signalCtrl, element, parseNodes, parseAttribsMap, isVisible, options } = state;
 			let { onlyOnce, parseBindSafe, parseBindHTML, onVisible } = options;
+			let self = this;
 			// Text Nodes
 			for(let [n,obj] of parseNodes){
 				let result, { node, exp, exec, signalObs, comment, updateIndex } = obj;
@@ -444,16 +445,16 @@
 					if(!exec){
 						signalObs = obj.signalObs = signalCtrl.createObserver();
 						exec = obj.exec = this._execExpression(element,node,exp,signalObs);
-						signalObs.addListener(()=>{
+						signalObs.addListener(function parseTextNode_signalObserver(){
 							let updateIndex = obj.updateIndex;
-							this.scopeDom.onceRAF(node,signalObs,()=>{
-								if(obj.updateIndex===updateIndex) this._updateTextNode(node,exec.runFn(),obj,state,updateIndex);
+							self.scopeDom.onceRAF(node,signalObs,function parseTextNode_signalObserver_RAF(){
+								if(obj.updateIndex===updateIndex) self._updateTextNode(node,exec.runFn(),obj,state,updateIndex,signalObs);
 							});
 						});
 					}
 					result = exec.runFn();
 				}
-				this._updateTextNode(node,result,obj,state,updateIndex);
+				this._updateTextNode(node,result,obj,state,updateIndex,signalObs);
 			}
 			// Element Attributes
 			for(let [node,attribMap] of parseAttribsMap){
@@ -465,14 +466,14 @@
 					if(!exec){
 						signalObs = obj.signalObs = signalCtrl.createObserver();
 						exec = obj.exec = this._execExpression(element,node,exp,signalObs);
-						signalObs.addListener(()=>{
+						signalObs.addListener(function parseAttribs_signalObserver(){
 							let updateIndex = obj.updateIndex;
-							this.scopeDom.onceRAF(node,signalObs,()=>{
-								if(obj.updateIndex===updateIndex) this._updateAttribute(node,name,exec.runFn(),obj,state,updateIndex);
+							self.scopeDom.onceRAF(node,signalObs,function parseAttribs_signalObserver_RAF(){
+								if(obj.updateIndex===updateIndex) self._updateAttribute(node,name,exec.runFn(),obj,state,updateIndex,signalObs);
 							});
 						});
 					}
-					this._updateAttribute(node,name,exec.runFn(),obj,state,updateIndex);
+					this._updateAttribute(node,name,exec.runFn(),obj,state,updateIndex,signalObs);
 				}
 			}
 			// Bind-Safe attribute
@@ -483,14 +484,14 @@
 					if(!exec){
 						signalObs = parseBindSafe.signalObs = signalCtrl.createObserver();
 						exec = parseBindSafe.exec = this._execExpression(element,element,exp,signalObs);
-						signalObs.addListener(()=>{
+						signalObs.addListener(function parseBindSafe_signalObserver(){
 							let updateIndex = parseBindSafe.updateIndex;
-							this.scopeDom.onceRAF(element,signalObs,()=>{
-								if(parseBindSafe.updateIndex===updateIndex) this._updateBind(element,false,exec.runFn(),parseBindSafe,state,updateIndex);
+							self.scopeDom.onceRAF(element,signalObs,function parseBindSafe_signalObserver_RAF(){
+								if(parseBindSafe.updateIndex===updateIndex) self._updateBind(element,false,exec.runFn(),parseBindSafe,state,updateIndex,signalObs);
 							});
 						});
 					}
-					this._updateBind(element,false,exec.runFn(),parseBindSafe,state,updateIndex);
+					this._updateBind(element,false,exec.runFn(),parseBindSafe,state,updateIndex,signalObs);
 				}
 			}
 			// Bind-HTML attribute
@@ -501,27 +502,27 @@
 					if(!exec){
 						signalObs = parseBindHTML.signalObs = signalCtrl.createObserver();
 						exec = parseBindHTML.exec = this._execExpression(element,element,exp,signalObs);
-						signalObs.addListener(()=>{
+						signalObs.addListener(function parseBindHTML_signalObserver(){
 							let updateIndex = parseBindHTML.updateIndex;
-							this.scopeDom.onceRAF(element,signalObs,()=>{
-								if(parseBindHTML.updateIndex===updateIndex) this._updateBind(element,true,exec.runFn(),parseBindHTML,state,updateIndex);
+							self.scopeDom.onceRAF(element,signalObs,function parseBindHTML_signalObserver_RAF(){
+								if(parseBindHTML.updateIndex===updateIndex) self._updateBind(element,true,exec.runFn(),parseBindHTML,state,updateIndex,signalObs);
 							});
 						});
 					}
-					this._updateBind(element,true,exec.runFn(),parseBindHTML,state,updateIndex);
+					this._updateBind(element,true,exec.runFn(),parseBindHTML,state,updateIndex,signalObs);
 				}
 			}
 		}
 		
-		_updateTextNode(node,result,obj,state,updateIndex){
+		_updateTextNode(node,result,obj,state,updateIndex,signalObs){
 			let { options } = state;
 			if(result instanceof Promise){
 				if(updateIndex===0){
-					this._updateTextNode(node,options.defaultText,obj,state,updateIndex);
+					this._updateTextNode(node,options.defaultText,obj,state,updateIndex,signalObs);
 					updateIndex = obj.updateIndex;
 				}
-				let onSuccess = (result)=>this._updateTextNode(node,result,obj,state,updateIndex);
-				let onError = ()=>this._updateTextNode(node,options.onError,obj,state,updateIndex);
+				let onSuccess = (result)=>this._updateTextNode(node,result,obj,state,updateIndex,signalObs);
+				let onError = ()=>this._updateTextNode(node,options.onError,obj,state,updateIndex,signalObs);
 				this.scopeDom.promiseToRAF(result,onSuccess,onError);
 				return;
 			}
@@ -529,6 +530,7 @@
 			if(obj.updateIndex>updateIndex) return;
 			obj.updateIndex++;
 			// Result Types
+			if(result instanceof this.scopeDom.signalInstance){ signalObs.recordSignal(result); result = result.get(); }
 			if(result instanceof Error) result = options.onError;
 			if(result instanceof Node){
 				let validNode = true;
@@ -558,11 +560,12 @@
 			if(obj.anchor && (!obj.anchor.isConnected || node.nextSibling!==obj.anchor)){ obj.skipUndo=true; obj.anchor.parentNode.insertBefore(node,obj.anchor); }
 		}
 		
-		_updateAttribute(element,attribute,result,obj,state,updateIndex){
+		_updateAttribute(element,attribute,result,obj,state,updateIndex,signalObs){
 			let { options } = state;
+			if(result instanceof this.scopeDom.signalInstance){ signalObs.recordSignal(result); result = result.get(); }
 			if(result instanceof Promise){
-				let onSuccess = (result)=>this._updateAttribute(element,attribute,result,obj,state,updateIndex);
-				let onError = ()=>this._updateAttribute(element,attribute,options.onError,obj,state,updateIndex);
+				let onSuccess = (result)=>this._updateAttribute(element,attribute,result,obj,state,updateIndex,signalObs);
+				let onError = ()=>this._updateAttribute(element,attribute,options.onError,obj,state,updateIndex,signalObs);
 				this.scopeDom.promiseToRAF(result,onSuccess,onError);
 				return;
 			}
@@ -575,11 +578,11 @@
 			else if(result?.length>=0){ result=''+result; if(element.getAttribute(attribute)!==result) element.setAttribute(attribute,result); }
 		}
 		
-		_updateBind(element,isHTML,result,obj,state,updateIndex){
+		_updateBind(element,isHTML,result,obj,state,updateIndex,signalObs){
 			let { options } = state;
 			if(result instanceof Promise){
-				let onSuccess = (result)=>this._updateBind(element,isHTML,result,obj,state,updateIndex);
-				let onError = ()=>this._updateBind(element,isHTML,options.onError,obj,state,updateIndex);
+				let onSuccess = (result)=>this._updateBind(element,isHTML,result,obj,state,updateIndex,signalObs);
+				let onError = ()=>this._updateBind(element,isHTML,options.onError,obj,state,updateIndex,signalObs);
 				this.scopeDom.promiseToRAF(result,onSuccess,onError);
 				return;
 			}
@@ -587,6 +590,7 @@
 			if(obj.updateIndex>updateIndex) return;
 			obj.updateIndex++;
 			// Result Types
+			if(result instanceof this.scopeDom.signalInstance){ signalObs.recordSignal(result); result = result.get(); }
 			if(result instanceof Error) result = options.onError;
 			if(result instanceof NodeList){ let e=document.createDocumentFragment(); for(let n of [...result])e.appendChild(n); result=e; }
 			else if(result instanceof HTMLCollection){ let e=document.createDocumentFragment(); for(let n of [...result])e.appendChild(n); result=e; }
