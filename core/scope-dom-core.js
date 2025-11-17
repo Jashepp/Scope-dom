@@ -1,7 +1,7 @@
 
 "use strict";
 (()=>{
-	function noopFn(){}; async function noopAsyncFn(){}; 
+	function noopFn(){}; async function noopAsyncFn(){};
 	
 	// Call multiple callbacks on Animation Frame
 	let rAFList=new Set(), onceRAFList=new Map(), isDuringRAF=false, isScheduled=false;
@@ -49,17 +49,15 @@
 	const commentNodeType = document.COMMENT_NODE;
 	const textNodeType = document.TEXT_NODE;
 	
-	const objectProto = Object.getPrototypeOf(Object());
-	const objectConstructor = objectProto.constructor; // Same as window.Object
+	const objectProto = Object.getPrototypeOf(Object()); // window.Object===objectProto.constructor
 	const nodeProto = Object.getPrototypeOf(Object.getPrototypeOf(Object.getPrototypeOf(document.createTextNode('text'))));
-	const nodeConstructor = nodeProto.constructor;
 	const elementProto = Object.getPrototypeOf(Object.getPrototypeOf(Object.getPrototypeOf(document.createElement('div'))));
-	const elementConstructor = elementProto.constructor;
-	function scopeAllowed(obj){
-		if(!obj) return false;
-		if(obj===objectProto || obj===objectConstructor || obj===nodeProto || obj===nodeConstructor || obj===elementProto || obj===elementConstructor) return false;
-		return true;
-	}
+	const functionProto = Object.getPrototypeOf(noopFn);
+	const functionAsyncProto = Object.getPrototypeOf(noopAsyncFn);
+	const nativeProtos = [objectProto,nodeProto,elementProto,functionProto,functionAsyncProto];
+	const nativeConstructors = nativeProtos.map(p=>p?.constructor);
+	function isNative(obj){ return nativeProtos.indexOf(obj)!==-1 || nativeConstructors.indexOf(obj)!==-1; }
+	function scopeAllowed(obj){ return obj && !isNative(obj); }
 	
 	const isElementLoaded = (()=>{
 		let domState=0, listener = ()=>{
@@ -78,7 +76,7 @@
 		};
 	})();
 	
-	const disableDocumentDefaultView = ()=>{ try{ Object.defineProperty(window.document,'defaultView',{ get(){ console.warn("scopeDom: document.defaultView is disabled"); return { getComputedStyle:window.getComputedStyle.bind(window) }; } }); }catch(e){ console.warn("scopeDom: Could not disable document.defaultView\n",e); } }
+	const disableDocumentDefaultView = ()=>{ try{ Object.defineProperty(window.document,'defaultView',{ __proto__:null, get(){ console.warn("scopeDom: document.defaultView is disabled"); return { getComputedStyle:window.getComputedStyle.bind(window) }; } }); }catch(e){ console.warn("scopeDom: Could not disable document.defaultView\n",e); } }
 	
 	const initDefaults = {
 		attribRegexMatch: /^\$((?:[\w\d]+)(?:\-[\w\d]+)*?)(?:\:((?:[\w\d]+)(?:\-[\w\d]+)*?))?$/, // group1: name, group2: option
@@ -114,13 +112,13 @@
 		
 		constructor(options={}){
 			if(singleInstance) throw new Error("scopeDom: single instance already constructed");
-			this._options = options = Object.assign(Object.create(initDefaults),Object(options));
+			this._options = options = { __proto__:null, ...initDefaults, ...options };
 			Object.freeze(this._options);
 			if(options.once) singleInstance = this;
 			if(!options.globalContext && options.documentContext && !options.documentDefaultView && window.document) disableDocumentDefaultView();
 			else if(options.globalContext && !options.documentContext) throw new Error("scopeDom: For documentContext to be false, globalContext must also be false");
 			let scope = options.scope===Object(options.scope) ? options.scope : new scopeBase();
-			if(!Object.hasOwn(scope,'$scope')) Object.defineProperty(scope,'$scope',{ get(){ return this; } });
+			if(!Object.hasOwn(scope,'$scope')) Object.defineProperty(scope,'$scope',{ __proto__:null, get(){ return this; } });
 			this.mainElement = options.element || null;
 			this.controller = new scopeController(scope,null,null,false,this);
 			this.namedScopeControllers = new Map();
@@ -157,7 +155,7 @@
 			else {
 				if(document.body) return onMainElement();
 				mutObs = new MutationObserver(function domMutation(m){ if(document.body) onMainElement(); });
-				mutObs.observe(document.head.parentNode,{ subtree:false, childList:true, attributes:false });
+				mutObs.observe(document.head.parentNode,{ __proto__:null, subtree:false, childList:true, attributes:false });
 			}
 		}
 		
@@ -167,19 +165,19 @@
 			if(name===null || name===false || name===void 0) name = null;
 			if(fn===null || fn===false || fn===void 0) fn = null;
 			if(name===null && fn===null){ // Disable/Empty default scopeController
-				this.namedScopeControllers.set(null,{ element:null, name, fn });
+				this.namedScopeControllers.set(null,{ __proto__:null, element:null, name, fn });
 				return;
 			}
 			if(!(typeof fn==="function")) throw new Error("scopeDom: scopeController params must be (name,function) or (function)");
 			if(name!==null) name = ''+name;
 			if(this.namedScopeControllers.has(name)) throw new Error(`scopeDom: scopeController ${name===null?'default':`"${name}"`} already exists`);
-			let ctrl = { element:null, name, fn };
+			let ctrl = { __proto__:null, element:null, name, fn };
 			this.namedScopeControllers.set(name,ctrl);
 			// Default Controller
 			if(name===null){
 				let scope = this.controller.scope;
 				let setScopes=new Set(); for(let s=scope; s && s!==Object; s=Object.getPrototypeOf(s)) setScopes.add(s); 
-				let proxy = new execExpressionProxy({ mainScopes:[scope], getScopes:new Set([this.controller.execContext,scope]), setScopes, silentHas:false });
+				let proxy = new execExpressionProxy({ __proto__:null, mainScopes:[scope], getScopes:new Set([this.controller.execContext,scope]), setScopes, silentHas:false });
 				return this.handleScopeCtrlFn(proxy,fn);
 			}
 		}
@@ -322,7 +320,7 @@
 			if(!rawAttribs) return null;
 			let attribs = new Map(), rawAliases = this._options.attributeAliases||null, nkAliases = this._options.attributeAliasNameKeys||null;
 			for(let { name:aName, value } of rawAttribs){
-				if(rawAliases && aName in rawAliases) aName = rawAliases[aName];
+				if(rawAliases && Object.hasOwn(rawAliases,aName)) aName = rawAliases[aName];
 				let [ _, nameFull, optionFull ] = regexExec(aName,this._options.attribRegexMatch) || [];
 				if(nameFull===void 0 || nameFull.length===0) continue;
 				let nameParts = this.__regexMatchAllFirstGroup(nameFull,this._options.attribRegexParts);
@@ -330,13 +328,13 @@
 				if(value?.length===0) value = null;
 				let isDefault = nameParts[0]==='default';
 				let nameKey = nameParts.join(' ');
-				if(nkAliases && nameKey in nkAliases) nameKey = nkAliases[nameKey];
+				if(nkAliases && Object.hasOwn(nkAliases,nameKey)) nameKey = nkAliases[nameKey];
 				let attrib = attribs.get(nameKey);
-				if(!attrib) attribs.set(nameKey,attrib={ isDefault, attribute:aName, nameKey, nameParts, value:null, options:new Map() });
+				if(!attrib) attribs.set(nameKey,attrib={ __proto__:null, isDefault, attribute:aName, nameKey, nameParts, value:null, options:new Map() });
 				if(optionFull!==void 0 && optionFull.length>0){
 					let optionParts = this.__regexMatchAllFirstGroup(optionFull,this._options.attribRegexParts);
 					let optionKey = optionParts.join(' ');
-					attrib.options.set(optionKey,{ isDefault, attribute:aName, nameKey:optionKey, optionParts, value });
+					attrib.options.set(optionKey,{ __proto__:null, isDefault, attribute:aName, nameKey:optionKey, optionParts, value });
 				}
 				else attrib.value = value;
 			}
@@ -355,9 +353,9 @@
 					if(options.size===0 || nameParts.length<=1 || nameParts[0]!=='default') continue;
 					nameParts = nameParts.slice(1);
 					let nameKey = nameParts.join(' ');
-					if(nkAliases && nameKey in nkAliases) nameKey = nkAliases[nameKey];
+					if(nkAliases && Object.hasOwn(nkAliases,nameKey)) nameKey = nkAliases[nameKey];
 					let defaultAttrib = defaults.get(nameKey);
-					if(!defaultAttrib) defaults.set(nameKey,defaultAttrib={ isDefault:true, attribute, nameKey, nameParts, value:null, options:new Map() });
+					if(!defaultAttrib) defaults.set(nameKey,defaultAttrib={ __proto__:null, isDefault:true, attribute, nameKey, nameParts, value:null, options:new Map() });
 					for(let [optKey,option] of options){
 						if(!defaultAttrib.options.has(optKey)) defaultAttrib.options.set(optKey,option);
 					}
@@ -393,7 +391,7 @@
 			return value;
 		}
 		_elementAttribParseOption(element,attribOpts,optName,parseOptions={}){
-			parseOptions = Object.assign({ default:null, emptyTrue:false, runExp:false },Object(parseOptions));
+			parseOptions = { __proto__:null, default:null, emptyTrue:false, runExp:false, ...parseOptions };
 			let optValue = parseOptions.default, opt = attribOpts.get(optName), isDefault = opt?.isDefault;
 			if(parseOptions.emptyTrue && (opt?.value==='' || opt?.value===null)) optValue = true;
 			else if(!parseOptions.runExp && opt?.value?.length>0) optValue = opt.value;
@@ -458,7 +456,7 @@
 		// Execute Expression on Element
 		_elementExecExp(elementScopeCtrl,expression,extra=null,options={}){
 			let extraScopes = extra?[extra]:[], elementScopes = this._getElementScopes(elementScopeCtrl.element);
-			options = Object.assign({ globalsHide:!this._options.globalContext, hideDocument:!this._options.documentContext },Object(options));
+			options = { __proto__:null, globalsHide:!this._options.globalContext, hideDocument:!this._options.documentContext, ...options };
 			return elementScopeCtrl.execElementExpression(expression,extraScopes,elementScopes,options);
 		}
 		// Get Element Scopes [[element,scopesArr],...]
@@ -474,7 +472,7 @@
 			let arr = this._elementExtraScopes.get(key), isolatedParent = isolated?.parentNode;
 			for(let i=0,l=arr.length; i<l; i++){
 				let item = arr[i];
-				if(item instanceof nodeConstructor){ // Flatten
+				if(item instanceof nodeProto.constructor){ // Flatten
 					if(isolated){
 						let isChildOrSibling = false;
 						for(let e=item; e; e=e.parentNode) if(e===isolated || e===isolatedParent){ isChildOrSibling=true; break; }
@@ -533,7 +531,7 @@
 					let options = this._elementAttribOptionsWithDefaults(element,scopeAttrib);
 					if(scopeAttrib.value===null) this._elementAttribFallbackOptionValue(scopeAttrib,['isolate']);
 					let isolated = options.get('isolate'), { value, attribute:$attribute } = scopeAttrib; // After fallback
-					let exp = value, extra = { $attribute }, expOpts = { run:true, useReturn:true };
+					let exp = value, extra = { __proto__:null, $attribute }, expOpts = { __proto__:null, run:true, useReturn:true };
 					// Prepare Named Scope
 					if(scopeNamedAttrib){
 						if(scopeNamedAttrib.value?.length>0) value = scopeNamedAttrib.value;
@@ -541,8 +539,8 @@
 						if(!ctrl){ console.warn(`scopeDom: scopeController "${name}" doesn't exist`); return; }
 						if(ctrl.element && ctrl.element!==element){ console.warn(`scopeDom: scopeController "${name}" is already in use`,{ ctrlElement:ctrl.element, newElement:element }); return; }
 						ctrl.element = element;
-						extra = { _ctrlFn:ctrl.fn };
-						exp = `{ _ctrlFn, $scopeElement:$this }`;
+						extra = { __proto__:null, _ctrlFn:ctrl.fn };
+						exp = `{ __proto__:null, _ctrlFn, $scopeElement:$this }`;
 					}
 					// New Scope
 					if(exp!==null){
@@ -556,9 +554,9 @@
 					}
 					// Run Named Scope Controller
 					if(scopeNamedAttrib){
-						expOpts = Object.assign({},expOpts,{ fnThis:null, useReturn:false }); // fnThis:null sets 'this' as proxy
+						expOpts = { __proto__:null, ...expOpts, fnThis:null, useReturn:false }; // fnThis:null sets 'this' as proxy
 						exp = `((fn)=>{ this._ctrlFn=void 0; instance.handleScopeCtrlFn(this,fn); })(_ctrlFn);`;
-						this._elementExecExp(elementScopeCtrl,exp,{ instance:this },expOpts);
+						this._elementExecExp(elementScopeCtrl,exp,{ __proto__:null, instance:this },expOpts);
 					}
 				}
 				// Other built-in attribs
@@ -574,7 +572,7 @@
 							let { attribute:$attribute } = attrib;
 							let raf = options.get('raf'), instant = options.get('instant');
 							if(value?.length>0){
-								let { runFn:connectCB } = this._elementExecExp(elementScopeCtrl,value,{ $attribute },{ run:false });
+								let { runFn:connectCB } = this._elementExecExp(elementScopeCtrl,value,{ __proto__:null, $attribute },{ __proto__:null, run:false });
 								queue.push(function attribConnect(){
 									if(raf && !isDuringRAF) onceRAF(element,$attribute,connectCB);
 									else if(instant) connectCB();
@@ -595,7 +593,7 @@
 						}
 						if(type==='update' && value?.length>0){
 							let { attribute:$attribute } = attrib;
-							let { runFn:updateCB } = this._elementExecExp(elementScopeCtrl,value,{ $attribute },{ run:false });
+							let { runFn:updateCB } = this._elementExecExp(elementScopeCtrl,value,{ __proto__:null, $attribute },{ __proto__:null, run:false });
 							// Register events straight away
 							let evt = '$update'+(name?.length>0?'-'+name:'')+(suffix!==null?suffix:'');
 							let removeListener = elementScopeCtrl.ctrl.$on(evt,()=>updateCB(),{},true);
@@ -626,7 +624,7 @@
 							let { attribute:$attribute } = attrib;
 							let raf = options.get('raf'), instant = options.get('instant'), pd = options.get('pd');
 							if(value?.length>0){
-								let self=this, { runFn:eventCB, firstScope } = this._elementExecExp(elementScopeCtrl,value,{ $attribute },{ run:false });
+								let self=this, { runFn:eventCB, firstScope } = this._elementExecExp(elementScopeCtrl,value,{ __proto__:null, $attribute },{ __proto__:null, run:false });
 								function eventListener(event){
 									if(pd) event.preventDefault();
 									firstScope.$event = event;
@@ -666,7 +664,7 @@
 							let { attribute:$attribute } = attrib;
 							let raf = options.get('raf'), instant = options.get('instant');
 							if(value?.length>0){
-								let { runFn:disconnectCB } = this._elementExecExp(elementScopeCtrl,value,{ $attribute },{ run:false });
+								let { runFn:disconnectCB } = this._elementExecExp(elementScopeCtrl,value,{ __proto__:null, $attribute },{ __proto__:null, run:false });
 								if(raf && !isDuringRAF) requestAF(disconnectCB);
 								else if(instant || isDuringRAF) disconnectCB();
 								else Promise.resolve().then(disconnectCB);
@@ -770,8 +768,8 @@
 			else Object.setPrototypeOf(this,scopeObj);
 			// Add methods
 			Object.defineProperties(mainObj,{
-				$scopeTop:{ configurable:false, enumerable:!true, get(){ return scopeCtrl?.topCtrl?.scope||scopeCtrl?.parentCtrl?.topCtrl?.scope||scopeCtrl?.parentCtrl?.scope||scopeCtrl?.scope; } },
-				$scopeParent:{ configurable:false, enumerable:!true, get(){ return scopeCtrl?.parentCtrl?.scope||scopeCtrl?.scope; } },
+				$scopeTop:{ __proto__:null, configurable:false, enumerable:!true, get(){ return scopeCtrl?.topCtrl?.scope||scopeCtrl?.parentCtrl?.topCtrl?.scope||scopeCtrl?.parentCtrl?.scope||scopeCtrl?.scope; } },
+				$scopeParent:{ __proto__:null, configurable:false, enumerable:!true, get(){ return scopeCtrl?.parentCtrl?.scope||scopeCtrl?.scope; } },
 			});
 			// Return this, or scopeObj if proto changed
 			return mainObj;
@@ -780,14 +778,14 @@
 	
 	class scopeBase {
 		constructor(){ return Object.create(null,{
-			$scope:{ configurable:false, enumerable:!true, get(){ return this; } }
+			__proto__: {},
+			$scope:{ __proto__:null, configurable:false, enumerable:!true, get(){ return this; } }
 		}); }
 	}
 	
-	const fnConstructor = Object.getPrototypeOf(noopFn).constructor, fnAsyncConstructor = Object.getPrototypeOf(noopAsyncFn).constructor;
 	class execExpression {
 		
-		static _genFunctionCode(expression,options,fnNameSuffix){
+		static #generateCode(expression,options,fnNameSuffix){
 			let { useAsync, strictMode, useReturn } = options;
 			let fnName = '$sdcExp'+(fnNameSuffix?.length>0 ? "_"+fnNameSuffix.replace(/[^A-Za-z0-9]/g,'_') : '');
 			let fnCode =    "with($sdcScope){let $sdcScope,arguments,constructor;";
@@ -795,41 +793,36 @@
 			fnCode += useReturn ? "return (\n\n"+expression+"\n\n);" : "\n\n"+expression+"\n\n";
 			fnCode +=         "}).apply(this)"+(useAsync?".catch($sdcCatchError);":";");
 			fnCode +=       "}";
-			//if(useAsync) fnCode +=     "return (async ()=>{ let $sdcCatchError;";
-			//fnCode +=                    "return "+(useAsync?"await (async ":"(")+"function "+fnName+"(){"+(strictMode?"\"use strict\";":"");
-			//fnCode += useReturn ?          "return (\n\n"+expression+"\n\n);" : "\n\n"+expression+"\n\n";
-			//fnCode +=                    "}).apply(this);";
-			//if(useAsync) fnCode +=     "})().catch($sdcCatchError);";
-			//fnCode +=                "}";
 			return fnCode;
 		}
 		
-		static _genScopes(mainScopes,extraScopes){
+		static #parseScopes(mainScopes,extraScopes){
+			if(!(mainScopes instanceof Set)) mainScopes = new Set(mainScopes);
 			if(!(extraScopes instanceof Set)) extraScopes = new Set(extraScopes);
 			let setScopes = new Set();
 			for(let ms of mainScopes) for(let s=ms; s && scopeAllowed(s); s=Object.getPrototypeOf(s)) setScopes.add(s);
 			//return { getScopes:extraScopes.union?extraScopes.union(setScopes):new Set([...extraScopes,...setScopes]), setScopes };
-			return { getScopes:extraScopes, setScopes };
+			return { __proto__:null, getScopes:extraScopes, setScopes };
 		}
 		
 		static buildExp(expression,mainScopes,extraScopes=[],options={}){
 			if(expression!==String(expression)) throw new Error("Invalid expression: "+expression);
-			options = Object.assign({ useReturn:false, fnThis:null, strictMode:true, useAsync:false, silentHas:true, globalsHide:true, throwGlobals:true, run:true, scopeUseOwn:null },Object(options));
+			options = { __proto__:null, useReturn:false, fnThis:null, strictMode:true, useAsync:false, silentHas:true, globalsHide:true, throwGlobals:true, run:true, scopeUseOwn:null, ...options };
 			let { fnThis, useAsync, scopeUseOwn, silentHas, globalsHide, throwGlobals } = options;
 			useAsync = options.useAsync = useAsync || expression.indexOf('await')!==-1;
 			let globalObj = window, globalCatch = noopFn;
 			if(globalsHide && throwGlobals) globalCatch = (key)=>{ throw new Error("Expression tried to access a global variable: "+key); };
-			let { getScopes, setScopes } = execExpression._genScopes(mainScopes,extraScopes);
+			let { getScopes, setScopes } = execExpression.#parseScopes(mainScopes,extraScopes);
 			//console.log(extraScopes?.[0]?.['$attribute']||'',expression,{ getScopes, setScopes, extraScopes, mainScopes, scopeUseOwn });
 			let proxy = new execExpressionProxy({ mainScopes, getScopes, setScopes, scopeUseOwn, silentHas, globalObj, globalsHide, globalCatch });
-			let fnCode = execExpression._genFunctionCode(expression,options,proxy.$attribute);
-			let fn, fnc = useAsync?fnAsyncConstructor:fnConstructor;
+			let fnCode = execExpression.#generateCode(expression,options,proxy.$attribute);
+			let fn, fnc = useAsync ? functionAsyncProto.constructor : functionProto.constructor;
 			let logFnError = (err)=>console.warn(`Error on Expression: ${expression}\n`,err.message,'\n',{ expression, fnCode, function:fn, mainScopes, getScopes, setScopes, result:err });
 			try{ fn = (new fnc(useAsync?['$sdcScope','$sdcCatchError']:['$sdcScope'],fnCode)).bind(fnThis||proxy,proxy,logFnError); }
 			catch(err){ logFnError(err); }
 			let runFn = !fn ? noopFn : function $sdcExpRun(){ try{ return fn(); }catch(err){ return logFnError(err),err; } };
 			//Object.freeze(fn); Object.freeze(runFn); Object.freeze(logFnError);
-			return { result:null, firstScope:getScopes.values().next().value, function:fn, runFn, logFnError, getScopes, setScopes, proxy, options };
+			return { __proto__:null, result:null, firstScope:getScopes.values().next().value, function:fn, runFn, logFnError, getScopes, setScopes, proxy, options };
 		}
 		
 		static runExp(expression,mainScopes,extraScopes=[],options={}){
@@ -849,7 +842,7 @@
 		// Alternative: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/unscopables
 		
 		constructor(obj){
-			obj = Object.assign({ mainScopes:[], getScopes:null, setScopes:null, scopeUseOwn:null, silentHas:true, globalObj:null, globalsHide:null, globalCatch:null, unscopables:frozenNullObj },Object(obj));
+			obj = { __proto__:null, mainScopes:null, getScopes:null, setScopes:null, scopeUseOwn:null, silentHas:true, globalObj:null, globalsHide:null, globalCatch:null, unscopables:frozenNullObj, ...obj };
 			if(!obj.scopeUseOwn) obj.scopeUseOwn = new WeakSet();
 			//Object.freeze(obj); Object.freeze(obj.getScopes); Object.freeze(obj.setScopes);
 			return new Proxy(obj,execExpressionProxy);
@@ -886,8 +879,8 @@
 		}
 		
 		static set = function execExpSet(obj,prop,value,receiver){
-			for(let s of obj.setScopes) if(Object.hasOwn(s,prop)) return execExpressionProxy._setResolve(s,prop,value,s), true;
-			for(let s of obj.mainScopes) return execExpressionProxy._setResolve(s,prop,value,s), true;
+			for(let s of obj.setScopes) if(Object.hasOwn(s,prop)) return execExpressionProxy._setResolve(s,prop,value,s);
+			for(let s of obj.mainScopes) return execExpressionProxy._setResolve(s,prop,value,s);
 			return false;
 		}
 		
@@ -898,8 +891,8 @@
 		}
 		
 		static defineProperty(obj,prop,descriptor){
-			for(let s of obj.setScopes) return Reflect.defineProperty(s,prop,descriptor);
-			for(let s of obj.mainScopes) return Reflect.defineProperty(s,prop,descriptor);
+			for(let s of obj.setScopes) if(Object.hasOwn(s,prop)) return Reflect.defineProperty(s,prop,{ __proto__:null, ...descriptor });
+			for(let s of obj.mainScopes) return Reflect.defineProperty(s,prop,{ __proto__:null, ...descriptor });
 			return false;
 		}
 		
@@ -920,17 +913,17 @@
 			return Array.from(obj.setScopes).length>0;
 		}
 		
-		static _getResolve(target,propertyKey,receiver){
-			let value = Reflect.get(target,propertyKey,receiver);
+		static _getResolve(target,prop,receiver){
+			let value = Reflect.get(target,prop,receiver);
 			// if(value instanceof signalInstance) return value.get();
 			return value;
 		}
 		
-		static _setResolve(target,propertyKey,value,receiver){
-			let descriptor = Object.getOwnPropertyDescriptor(target,propertyKey);
-			if(descriptor?.value instanceof signalInstance) return descriptor.value.set(value);
-			else if(descriptor?.set?.[signalSymb] instanceof signalInstance) return descriptor.set(value);
-			return Reflect.set(target,propertyKey,value,receiver);
+		static _setResolve(target,prop,value,receiver){
+			let descriptor = Object.getOwnPropertyDescriptor(target,prop);
+			if(descriptor?.value instanceof signalInstance) return descriptor.value.set(value), true;
+			else if(descriptor?.set?.[signalSymb] instanceof signalInstance) return descriptor.set(value), true;
+			return Reflect.set(target,prop,value,receiver);
 		}
 		
 	}
@@ -1138,18 +1131,18 @@
 		}
 		
 		$on(name,listener,options={},returnRemove=false){
-			options = Object.assign({ capture:true, passive:false },Object(options));
+			options = { __proto__:null, capture:true, passive:false, ...options };
 			this.eventRegistry.add(this.eventTarget,name,listener,options);
 			if(returnRemove) return this.eventRegistry.remove.bind(this.eventRegistry,this.eventTarget,name,listener,options);
 		}
 		
 		$once(name,listener,options={},returnRemove=false){
-			options = Object.assign({ capture:true, passive:false, once:true },Object(options));
+			options = { __proto__:null, capture:true, passive:false, once:true, ...options };
 			return this.$on(name,listener,options,returnRemove);
 		}
 		
 		$emit(name,detail=null,options=null){
-			options = Object.assign({ detail:detail, bubbles:false, cancelable:false, composed:true },Object(options));
+			options = { __proto__:null, detail:detail, bubbles:false, cancelable:false, composed:true, ...options };
 			return this.eventTarget.dispatchEvent(new CustomEvent(name,options));
 		}
 		
@@ -1158,18 +1151,18 @@
 		}
 		
 		$onTarget(target,name,listener,options={},returnRemove=false){
-			options = Object.assign({ capture:true, passive:false },Object(options));
+			options = { __proto__:null, capture:true, passive:false, ...options };
 			this.eventRegistry.add(target,name,listener,options);
 			if(returnRemove) return this.eventRegistry.remove.bind(this.eventRegistry,target,name,listener,options);
 		}
 		
 		$onceTarget(target,name,listener,options={},returnRemove=false){
-			options = Object.assign({ capture:true, passive:false, once:true },Object(options));
+			options = { __proto__:null, capture:true, passive:false, once:true, ...options };
 			return this.$onTarget(target,name,listener,options,returnRemove);
 		}
 		
 		$emitTarget(target,name,detail=null,options=null){
-			options = Object.assign({ detail:detail, bubbles:false, cancelable:false, composed:true },Object(options));
+			options = { __proto__:null, detail:detail, bubbles:false, cancelable:false, composed:true, ...options };
 			return target.dispatchEvent(new CustomEvent(name,options));
 		}
 		
@@ -1218,9 +1211,10 @@
 		}
 		
 		// extraScopes [{},...] elementScopes: [[element,scopesArr],...]
-		execElementExpression(expression,extraScopes=null,elementScopes=null,fnOptions={}){
+		execElementExpression(expression,extraScopes=null,elementScopes=null,fnOptions=null){
+			fnOptions = { __proto__:null, ...fnOptions };
 			let elementContext = !fnOptions.hideDocument ? this.execContext : null;
-			if(!('fnThis' in fnOptions) && !fnOptions.hideDocument) fnOptions.fnThis = this.element;
+			if(!Object.hasOwn(fnOptions,'fnThis') && !fnOptions.hideDocument) fnOptions.fnThis = this.element;
 			let instance = this.ctrl.scopeDomInstance;
 			// Main controller scopes
 			let mainScopes = [];
@@ -1289,7 +1283,7 @@
 		}
 		
 		$emitDomChildren(name,detail=null,options=null,emitSelf=false){
-			options = Object.assign(Object(options),{ bubbles:false });
+			options = { __proto__:null, ...options, bubbles:false };
 			let emitChildren = (e,emitSelf=false)=>{
 				if(emitSelf) this.ctrl.$emitTarget(e,name,detail,options);
 				if(e?.childNodes?.length>0) for(let c of [...e.childNodes]) if(c.isConnected && c.parentNode===e) emitChildren(c,true);

@@ -128,7 +128,7 @@
 				parseAttribNames.add(name);
 				if(value?.length>0){
 					let m = parseAttribsMap.get(element) || new Map();
-					m.set(name,{ exec:null, signalObs:null, exp:value, original:null });
+					m.set(name,{ __proto__:null, exec:null, signalObs:null, exp:value, original:null });
 					if(!parseAttribsMap.has(element)) parseAttribsMap.set(element,m);
 				}
 			}
@@ -137,15 +137,15 @@
 			let bindSafe = this._getAttribOption(plugInfo,attrib,attribOpts,'bind',false,false,false); // $parse:bind
 			let bindHTML = this._getAttribOption(plugInfo,attrib,attribOpts,'bind html',false,false,false); // $parse:bind-html
 			if(!(parseTree.value && !parseTree.isDefault) && !(parseText.value && !parseText.isDefault)){
-				if(bindSafe.value?.length>0) parseBindSafe = { exec:null, signalObs:null, exp:bindSafe.value, original:element.textContent, ready:false };
-				else if(bindHTML.value?.length>0) parseBindHTML = { exec:null, signalObs:null, exp:bindHTML.value, original:element.innerHTML, ready:false };
+				if(bindSafe.value?.length>0) parseBindSafe = { __proto__:null, exec:null, signalObs:null, exp:bindSafe.value, original:element.textContent, ready:false };
+				else if(bindHTML.value?.length>0) parseBindHTML = { __proto__:null, exec:null, signalObs:null, exp:bindHTML.value, original:element.innerHTML, ready:false };
 				if(parseBindSafe || parseBindHTML) this.elementChildExcludeText.add(element);
 			}
 			// State
-			let state = {
+			let state = { __proto__:null,
 				signalCtrl: elementScopeCtrl.ctrl.signalCtrl,
 				element, normalize:null, parseNodes:new Map(), parseAttribNames, parseAttribsMap, nodesPending:false, parsePending:false, isVisible:false,
-				options:{
+				options:{ __proto__:null,
 					parseTree:parseTree.value, parseText:parseText.value, onlyOnce:onlyOnce.value, updateEvent:updateEvent.value, updateDomEvent:updateDomEvent.value,
 					onError:onError.value, allowDomResult:allowDom.value, onVisible:visible.value, defaultText:defaultText.value,
 					exclude:exclude.value, expRegex, parseBindSafe, parseBindHTML, safeMode:safeMode.value
@@ -160,10 +160,10 @@
 			// Listen
 			let triggerExec = this._runParseExpressions.bind(this,state);
 			if(updateEvent.value?.length>0){ // $parse:update='event', $emit('event')
-				this._registerEvent(element,elementScopeCtrl.ctrl.$on(updateEvent.value,triggerExec,{ capture:false, passive:true },true));
+				this._registerEvent(element,elementScopeCtrl.ctrl.$on(updateEvent.value,triggerExec,{ __proto__:null, capture:false, passive:true },true));
 			}
 			if(updateDomEvent.value?.length>0){ // $parse:update-dom='event', $emitDom('event')
-				this._registerEvent(element,elementScopeCtrl.$onDom(updateDomEvent.value,triggerExec,{ capture:true, passive:true },true));
+				this._registerEvent(element,elementScopeCtrl.$onDom(updateDomEvent.value,triggerExec,{ __proto__:null, capture:true, passive:true },true));
 			}
 			// Add $parse() to element & element context
 			elementScopeCtrl.execContext.$parse = element.$parse = triggerExec;
@@ -194,7 +194,7 @@
 				//else { console.warn('pluginIf: invalid result, expecting string,',result,attribOpts.get(optName)?.attribute,element); return false; }
 			}
 			else if(!runExp && opt?.value?.length>0) optValue = opt.value;
-			return { value:optValue, raw:opt?.value, attribOption:opt, isDefault };
+			return { __proto__:null, value:optValue, raw:opt?.value, attribOption:opt, isDefault };
 		}
 		
 		_disabledNormalize(){ console.warn('This element has .normalize disabled while parse is being used.'); };
@@ -218,7 +218,7 @@
 				}
 				if(check) this._scanParseRunSafe(state);
 			}.bind(this));
-			mutObs.observe(element,{ subtree:!!options.parseTree, childList:true, attributes:false });
+			mutObs.observe(element,{ __proto__:null, subtree:!!options.parseTree, childList:true, attributes:false });
 			this.mutObsMap.set(element,mutObs);
 		}
 		
@@ -234,7 +234,7 @@
 					else { if(prevVisible){ state.isVisible=false; } }
 				}
 				if(check) this.scopeDom.onceRAF(state.element,'pluginParse-onVisible',fn);
-			}.bind(this),{ threshold:[0,0.05,0.5,0.95,1], rootMargin:"10px", });
+			}.bind(this),{ __proto__:null, threshold:[0,0.05,0.5,0.95,1], rootMargin:"10px", });
 			intObs.observe(element);
 			this.intObsMap.set(element,intObs);
 		}
@@ -307,7 +307,7 @@
 					for(let { name, value } of eTarget.attributes){
 						if(!parseAttribNames.has(name) || !this.scopeDom.regexTest(value,expRegex)) continue;
 						if(parseAttribsMap.get(eTarget)?.has(name)) continue;
-						attribs.add({ element:eTarget, name, value });
+						attribs.add({ __proto__:null, element:eTarget, name, value });
 						state.parsePending = true;
 					}
 				}
@@ -349,7 +349,7 @@
 							parseNode = document.createTextNode(expOuter);
 							nodes.push(parseNode);
 						}
-						parseNodes.set(parseNode,{ node:parseNode, exec:null, signalObs:null, exp:expInner, original:expOuter, anchor:null, updateIndex:0, lastResult:expOuter });
+						parseNodes.set(parseNode,{ __proto__:null, node:parseNode, exec:null, signalObs:null, exp:expInner, original:expOuter, anchor:null, updateIndex:0, lastResult:expOuter });
 						this.allParseTextNodes.add(parseNode);
 						//if(extraScopes) this.instance._elementExtraScopes.set(parseNode,extraScopes);
 					}
@@ -383,7 +383,7 @@
 					let exp, attribMap = parseAttribsMap.get(e);
 					if(expArr.length===1) exp = expArr[0];
 					else exp = `[${expArr.join(',')}].join('')`;
-					if(!attribMap.has(name)) attribMap.set(name,{ exec:null, signalObs:null, exp, original:text, updateIndex:0 });
+					if(!attribMap.has(name)) attribMap.set(name,{ __proto__:null, exec:null, signalObs:null, exp, original:text, updateIndex:0 });
 				}
 			}
 		}

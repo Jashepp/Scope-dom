@@ -86,8 +86,8 @@
 			//instance._cacheConnectedNodes.add(anchorEnd);
 			// Register Events
 			if(!this.eventMap.has(elementAnchor)){
-				if(updateEvent?.length>0) this._registerEvent(elementAnchor,scopeCtrl.ctrl.$on(updateEvent,state.triggerExec,{ capture:false, passive:true },true));
-				if(updateDomEvent?.length>0) this._registerEvent(elementAnchor,scopeCtrl.$onDom(updateDomEvent,state.triggerExec,{ capture:true, passive:true },true));
+				if(updateEvent?.length>0) this._registerEvent(elementAnchor,scopeCtrl.ctrl.$on(updateEvent,state.triggerExec,{ __proto__:null, capture:false, passive:true },true));
+				if(updateDomEvent?.length>0) this._registerEvent(elementAnchor,scopeCtrl.$onDom(updateDomEvent,state.triggerExec,{ __proto__:null, capture:true, passive:true },true));
 			}
 			// Run Expressions
 			state.triggerExec();
@@ -120,8 +120,8 @@
 			includeNode = includeNode.value;
 			// New State
 			let mainTemplate, fromElement, fromElementAnchor, fromElementConnected, elementChildren, anchorStart, anchorEnd, createAnchorAfter, elementAnchor=element;
-			let state = {
-				options:{ onlyOnce, keyName, itemName, scopeName, updateEvent, updateDomEvent, onUpdateEvent, cacheList },
+			let state = { __proto__:null,
+				options:{ __proto__:null, onlyOnce, keyName, itemName, scopeName, updateEvent, updateDomEvent, onUpdateEvent, cacheList },
 				mainTemplate:null, anchorStart:null, anchorEnd:null, elementAnchor, element, scopeCtrl:elementScopeCtrl, domCache:new WeakMap(),
 				exec:null, connected:true, ready:false, itemsArr:null, domArr:null, anchorArr:null, triggerExec:null, onUpdateExec:null, updateIndex:0,
 			};
@@ -188,7 +188,7 @@
 			if(!mainTemplate && fromElement && !elementChildren){
 				fromElementConnected = fromElement.isConnected;
 				fromElement.remove();
-				if(!fromElementConnected) this._createTemplateFromElement(state,{ fromElement, fromElementAnchor, includeNode, attribute, attribOpts });
+				if(!fromElementConnected) this._createTemplateFromElement(state,{ __proto__:null, fromElement, fromElementAnchor, includeNode, attribute, attribOpts });
 				mainTemplate = state.mainTemplate;
 			}
 			// State
@@ -203,7 +203,7 @@
 			function finishSetupPluginRepeat(){
 				// Finish template creation
 				if(!mainTemplate && fromElement && fromElementConnected){
-					this._createTemplateFromElement(state,{ fromElement, includeNode, fromElementAnchor, attribute, attribOpts });
+					this._createTemplateFromElement(state,{ __proto__:null, fromElement, includeNode, fromElementAnchor, attribute, attribOpts });
 					mainTemplate = state.mainTemplate;
 					if(!fromElement.isConnected) elementAnchor = state.elementAnchor = mainTemplate;
 				}
@@ -233,8 +233,8 @@
 					// Add $repeat() to element & element context
 					state.scopeCtrl.execContext.$repeat = elementAnchor.$repeat = triggerExec;
 					// Register Events
-					if(updateEvent?.length>0) this._registerEvent(elementAnchor,state.scopeCtrl.ctrl.$on(updateEvent,triggerExec,{ capture:false, passive:true },true));
-					if(updateDomEvent?.length>0) this._registerEvent(elementAnchor,state.scopeCtrl.$onDom(updateDomEvent,triggerExec,{ capture:true, passive:true },true));
+					if(updateEvent?.length>0) this._registerEvent(elementAnchor,state.scopeCtrl.ctrl.$on(updateEvent,triggerExec,{ __proto__:null, capture:false, passive:true },true));
+					if(updateDomEvent?.length>0) this._registerEvent(elementAnchor,state.scopeCtrl.$onDom(updateDomEvent,triggerExec,{ __proto__:null, capture:true, passive:true },true));
 				}
 				// Run Expressions
 				this._runExpressions(plugInfo,state,value);
@@ -289,7 +289,7 @@
 				//else { console.warn('pluginRepeat: invalid result, expecting string,',result,attribOpts.get(optName)?.attribute,element); return false; }
 			}
 			else if(!runExp && opt?.value?.length>0) optValue = opt.value;
-			return { value:optValue, raw:opt?.value, attribOption:opt, isDefault, execResult };
+			return { __proto__:null, value:optValue, raw:opt?.value, attribOption:opt, isDefault, execResult };
 		}
 		
 		_runExpressions(plugInfo,state,exp){
@@ -306,6 +306,8 @@
 			// Get Items
 			if(!exec) state.exec = exec = instance._elementExecExp(state.scopeCtrl,exp,null,{ silentHas:true, useReturn:true, run:false });
 			let execResult = exec.runFn();
+			// Resolve Signal
+			if(execResult instanceof this.scopeDom.signalInstance) execResult = execResult.get();
 			// Handle fallback when Promise on first update
 			if(state.itemsArr===null && execResult instanceof Promise){
 				this._handleRepeatDOM(plugInfo,state,updateIndex,[]);
@@ -326,6 +328,8 @@
 			state.updateIndex++;
 			// Update state
 			element.$repeatResult = elementAnchor.$repeatResult = execResult;
+			// Resolve Signal
+			if(execResult instanceof this.scopeDom.signalInstance) execResult = execResult.get();
 			// Convert list into entries [[key,value],...]
 			let itemsArr = [], domArr = [], anchorArr = [], isArr=false;
 			if(execResult instanceof Map){ itemsArr=Object.entries(execResult); }
@@ -428,7 +432,7 @@
 				usedAnchors.add(anchor);
 				// Set Element Scopes
 				let [$prevKey,$prevItem] = itemsArr[i-1]||[], [$nextKey,$nextItem] = itemsArr[i+1]||[];
-				let scope = { $index:i, $isFirst:i===0, $isLast:i===l-1, [keyName]:key, [itemName]:item, $prevKey, $prevItem, $nextKey, $nextItem };
+				let scope = { __proto__:null, $index:i, $isFirst:i===0, $isLast:i===l-1, [keyName]:key, [itemName]:item, $prevKey, $prevItem, $nextKey, $nextItem };
 				if(scopeName!==null && scopeName?.length>0) scope = { [scopeName]:scope }; // $repeat:scope="$repeat1" // $repeat1.$item
 				scope[symbRepeatElementScope] = elementAnchor;
 				anchor[symbRepeatElementScope] = elementAnchor;

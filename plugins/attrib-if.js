@@ -198,9 +198,9 @@
 			let defaultValue = instance._elementAttribParseOption(element,attribOpts,'default',{ default:false, emptyTrue:false, runExp:true }).value; // $if:default='true' (eg, promise)
 			// State
 			onlyOnce=(onlyOnce.value===true); domRemove=(domRemove.value===true); //domOnce=(domOnce.value===true);
-			let state = {
+			let state = { __proto__:null,
 				element, isOnlyMatch, ifValue, ifElseValue, ifMatchValue, ifCaseValue, matchOpts, depList:null,
-				options:{ onlyOnce, domRemove, onShowEvent, onHideEvent, defaultValue },
+				options:{ __proto__:null, onlyOnce, domRemove, onShowEvent, onHideEvent, defaultValue },
 				showing:null, exec:null, execMatch:null, anchor:null, defaultDisplay:null, onShowExec:null, onHideExec:null, updateIndex:0,
 				isTemplate, tplNodes:null, tplAnchorStart:null, tplAnchorEnd:null, tplDefaultDisplay:null,
 			};
@@ -212,8 +212,8 @@
 			// Add $if() to element & element context
 			elementScopeCtrl.execContext.$if = element.$if = triggerExec;
 			// Register Events
-			if(updateEvent?.length>0) this._registerEvent(element,elementScopeCtrl.ctrl.$on(updateEvent,triggerExec,{ capture:false, passive:true },true));
-			if(updateDomEvent?.length>0) this._registerEvent(element,elementScopeCtrl.$onDom(updateDomEvent,triggerExec,{ capture:true, passive:true },true));
+			if(updateEvent?.length>0) this._registerEvent(element,elementScopeCtrl.ctrl.$on(updateEvent,triggerExec,{ __proto__:null, capture:false, passive:true },true));
+			if(updateDomEvent?.length>0) this._registerEvent(element,elementScopeCtrl.$onDom(updateDomEvent,triggerExec,{ __proto__:null, capture:true, passive:true },true));
 			// Continue when ready
 			instance.onReady(function onReadyPluginIf(){
 				this._runIfExpressions(plugInfo,expAttrib,state,exp);
@@ -233,7 +233,7 @@
 		}
 		_execExpression(plugInfo,exp,useReturn=true,extra=null){
 			if(!(exp?.length>0)) return null;
-			return this.instance._elementExecExp(plugInfo.elementScopeCtrl,exp,Object.assign({ $expression:exp },Object(extra)),{ silentHas:true, useReturn, run:false });
+			return this.instance._elementExecExp(plugInfo.elementScopeCtrl,exp,{ __proto__:null, $expression:exp, ...extra },{ silentHas:true, useReturn, run:false });
 		}
 		_runIfExpressions(plugInfo,attrib,state,exp,runMatch=true){
 			let { instance, isElementLoaded } = this;
@@ -283,6 +283,8 @@
 			let { ifValue, ifElseValue, ifMatchValue, ifCaseValue, isTemplate, execMatch, options:{ matchOnce, defaultValue } } = state;
 			// Ignore old results
 			if(state.updateIndex>updateIndex) return;
+			// Resolve Signal
+			if(result instanceof this.scopeDom.signalInstance) result = result.get();
 			// If result is promise, use default & handleResult when settled
 			if(result instanceof Promise){
 				// Fallback / Default Value
@@ -293,7 +295,7 @@
 				return;
 			}
 			// force updateOthers if match result is a promise
-			if(!updateOthers && execMatch?.result instanceof Promise && matchCasePromiseResultSymbol in execMatch.result) updateOthers = true;
+			if(!updateOthers && execMatch?.result instanceof Promise && Object.hasOwn(execMatch.result,matchCasePromiseResultSymbol)) updateOthers = true;
 			// if updateOthers, check depList
 			if(updateOthers && state.depList) for(let eState of state.depList) if(eState.showing){ result=false; ifElseValue=false; ifCaseValue=false; break; }
 			// Handle if-match & if-case
@@ -315,12 +317,12 @@
 					execMatch = state.execMatch = this.instance._elementExecExp(this.instance._elementScopeCtrl(matchElement),ifMatch,{ $expression:ifMatch },{ silentHas:true, useReturn:true, run:false, fnThis:null }); // fnThis:null sets 'this' as proxy
 				}
 				matchResult = execMatch.result;
-				if(execMatch.result instanceof Promise && matchCasePromiseResultSymbol in execMatch.result) matchResult = execMatch.result[matchCasePromiseResultSymbol];
+				if(execMatch.result instanceof Promise && Object.hasOwn(execMatch.result,matchCasePromiseResultSymbol)) matchResult = execMatch.result[matchCasePromiseResultSymbol];
 				if(execMatch.result instanceof Promise && execMatch.result?.[matchCasePromiseWaitSymbol]) matchResult = defaultValue;
 				else if(firstRun || (runMatch!==false && !matchOnce)){
 					console.log({ firstRun, runMatch, matchOnce });
 					matchResult = execMatch.result = execMatch.runFn();
-					if(execMatch.result instanceof Promise && matchCasePromiseResultSymbol in execMatch.result) matchResult = execMatch.result[matchCasePromiseResultSymbol];
+					if(execMatch.result instanceof Promise && Object.hasOwn(execMatch.result,matchCasePromiseResultSymbol)) matchResult = execMatch.result[matchCasePromiseResultSymbol];
 					else if(execMatch.result instanceof Promise && execMatch.result?.[matchCasePromiseWaitSymbol]) matchResult = defaultValue;
 					else if(execMatch.result instanceof Promise){
 						matchResult = defaultValue;
@@ -365,7 +367,7 @@
 				// Regex
 				if(caseObj instanceof RegExp && typeof matchObj==='string') return caseObj.test(matchObj);
 				// Special Function
-				if(caseObj instanceof Function && matchCaseOperatorSymbol in caseObj){
+				if(caseObj instanceof Function && Object.hasOwn(caseObj,matchCaseOperatorSymbol)){
 					let operator = caseObj[matchCaseOperatorSymbol];
 					let arr = caseObj(matchObj), result = false;
 					if(operator==='or'){ result=false; for(let v of arr) if(this._matchCase(matchObj,v)) return true; }
@@ -401,7 +403,7 @@
 				// Object
 				if(typeof matchObj==='object' && typeof caseObj==='object' && matchObj!==null && caseObj!==null){
 					matchObj = Object(matchObj); caseObj = Object(caseObj);
-					for(let key in caseObj) if(!(key in matchObj) || !this._matchCase(matchObj[key],caseObj[key])) return false;
+					for(let key of Object.keys(caseObj)) if(!Object.hasOwn(matchObj,key) || !this._matchCase(matchObj[key],caseObj[key])) return false;
 					return true;
 				}
 			}catch(err){ console.warn('pluginIf: matchCase error:',caseObj,`\n`,err); }
