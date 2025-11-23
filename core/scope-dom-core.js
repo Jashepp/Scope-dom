@@ -4,6 +4,7 @@
 	function noopFn(){}; async function noopAsyncFn(){};
 	
 	const deferFn = Promise.prototype.then.bind(Promise.resolve());
+	const { getPrototypeOf, getOwnPropertyDescriptor, defineProperty, hasOwn } = Object;
 	
 	// Call multiple callbacks on Animation Frame
 	let rAFList=new Set(), onceRAFList=new Map(), isDuringRAF=false, isScheduled=false;
@@ -51,11 +52,11 @@
 	const commentNodeType = document.COMMENT_NODE;
 	const textNodeType = document.TEXT_NODE;
 	
-	const objectProto = Object.getPrototypeOf(Object()); // window.Object===objectProto.constructor
-	const nodeProto = Object.getPrototypeOf(Object.getPrototypeOf(Object.getPrototypeOf(document.createTextNode('text'))));
-	const elementProto = Object.getPrototypeOf(Object.getPrototypeOf(Object.getPrototypeOf(document.createElement('div'))));
-	const functionProto = Object.getPrototypeOf(noopFn);
-	const functionAsyncProto = Object.getPrototypeOf(noopAsyncFn);
+	const objectProto = getPrototypeOf(Object()); // window.Object===objectProto.constructor
+	const nodeProto = getPrototypeOf(getPrototypeOf(getPrototypeOf(document.createTextNode('text'))));
+	const elementProto = getPrototypeOf(getPrototypeOf(getPrototypeOf(document.createElement('div'))));
+	const functionProto = getPrototypeOf(noopFn);
+	const functionAsyncProto = getPrototypeOf(noopAsyncFn);
 	const nativeProtos = [objectProto,nodeProto,elementProto,functionProto,functionAsyncProto];
 	const nativeConstructors = nativeProtos.map(p=>p?.constructor);
 	function isNative(obj){ return nativeProtos.indexOf(obj)!==-1 || nativeConstructors.indexOf(obj)!==-1; }
@@ -78,7 +79,7 @@
 		};
 	})();
 	
-	const disableDocumentDefaultView = ()=>{ try{ Object.defineProperty(window.document,'defaultView',{ __proto__:null, get(){ console.warn("scopeDom: document.defaultView is disabled"); return { getComputedStyle:window.getComputedStyle.bind(window) }; } }); }catch(e){ console.warn("scopeDom: Could not disable document.defaultView\n",e); } }
+	const disableDocumentDefaultView = ()=>{ try{ defineProperty(window.document,'defaultView',{ __proto__:null, get(){ console.warn("scopeDom: document.defaultView is disabled"); return { getComputedStyle:window.getComputedStyle.bind(window) }; } }); }catch(e){ console.warn("scopeDom: Could not disable document.defaultView\n",e); } }
 	
 	const initDefaults = {
 		attribRegexMatch: /^\$((?:[\w\d]+)(?:\-[\w\d]+)*?)(?:\:((?:[\w\d]+)(?:\-[\w\d]+)*?))?$/, // group1: name, group2: option
@@ -122,7 +123,7 @@
 			if(!options.globalContext && options.documentContext && !options.documentDefaultView && window.document) disableDocumentDefaultView();
 			else if(options.globalContext && !options.documentContext) throw new Error("scopeDom: For documentContext to be false, globalContext must also be false");
 			let scope = options.scope===Object(options.scope) ? options.scope : new scopeBase();
-			if(!Object.hasOwn(scope,'$scope')) Object.defineProperty(scope,'$scope',{ __proto__:null, get(){ return this; } });
+			if(!hasOwn(scope,'$scope')) defineProperty(scope,'$scope',{ __proto__:null, get(){ return this; } });
 			this.mainElement = options.element || null;
 			this.controller = new scopeController(scope,null,null,false,this);
 			this.namedScopeControllers = new Map();
@@ -180,7 +181,7 @@
 			// Default Controller
 			if(name===null){
 				let scope = this.controller.scope;
-				let setScopes=new Set(); for(let s=scope; s && s!==Object; s=Object.getPrototypeOf(s)) setScopes.add(s); 
+				let setScopes=new Set(); for(let s=scope; s && s!==Object; s=getPrototypeOf(s)) setScopes.add(s); 
 				let proxy = new execExpressionProxy({ __proto__:null, mainScopes:[scope], getScopes:new Set([this.controller.execContext,scope]), setScopes, silentHas:false });
 				return this.handleScopeCtrlFn(proxy,fn);
 			}
@@ -324,7 +325,7 @@
 			if(!rawAttribs) return null;
 			let attribs = new Map(), rawAliases = this._options.attributeAliases||null, nkAliases = this._options.attributeAliasNameKeys||null;
 			for(let { name:aName, value } of rawAttribs){
-				if(rawAliases && Object.hasOwn(rawAliases,aName)) aName = rawAliases[aName];
+				if(rawAliases && hasOwn(rawAliases,aName)) aName = rawAliases[aName];
 				let [ _, nameFull, optionFull ] = regexExec(aName,this._options.attribRegexMatch) || [];
 				if(nameFull===void 0 || nameFull.length===0) continue;
 				let nameParts = this.__regexMatchAllFirstGroup(nameFull,this._options.attribRegexParts);
@@ -332,7 +333,7 @@
 				if(value?.length===0) value = null;
 				let isDefault = nameParts[0]==='default';
 				let nameKey = nameParts.join(' ');
-				if(nkAliases && Object.hasOwn(nkAliases,nameKey)) nameKey = nkAliases[nameKey];
+				if(nkAliases && hasOwn(nkAliases,nameKey)) nameKey = nkAliases[nameKey];
 				let attrib = attribs.get(nameKey);
 				if(!attrib) attribs.set(nameKey,attrib={ __proto__:null, isDefault, attribute:aName, nameKey, nameParts, value:null, options:new Map() });
 				if(optionFull!==void 0 && optionFull.length>0){
@@ -357,7 +358,7 @@
 					if(options.size===0 || nameParts.length<=1 || nameParts[0]!=='default') continue;
 					nameParts = nameParts.slice(1);
 					let nameKey = nameParts.join(' ');
-					if(nkAliases && Object.hasOwn(nkAliases,nameKey)) nameKey = nkAliases[nameKey];
+					if(nkAliases && hasOwn(nkAliases,nameKey)) nameKey = nkAliases[nameKey];
 					let defaultAttrib = defaults.get(nameKey);
 					if(!defaultAttrib) defaults.set(nameKey,defaultAttrib={ __proto__:null, isDefault:true, attribute, nameKey, nameParts, value:null, options:new Map() });
 					for(let [optKey,option] of options){
@@ -765,7 +766,7 @@
 		constructor(scopeObj,scopeCtrl){
 			let mainObj = this;
 			// If scopeObj is a plain Object, change proto to scopeBase
-			if(Object.getPrototypeOf(scopeObj)===objectProto){
+			if(getPrototypeOf(scopeObj)===objectProto){
 				Object.setPrototypeOf(scopeObj,new scopeBase());
 				mainObj = scopeObj;
 			}
@@ -805,7 +806,7 @@
 			if(!(mainScopes instanceof Set)) mainScopes = new Set(mainScopes);
 			if(!(extraScopes instanceof Set)) extraScopes = new Set(extraScopes);
 			let setScopes = new Set();
-			for(let ms of mainScopes) for(let s=ms; s && scopeAllowed(s); s=Object.getPrototypeOf(s)) setScopes.add(s);
+			for(let ms of mainScopes) for(let s=ms; s && scopeAllowed(s); s=getPrototypeOf(s)) setScopes.add(s);
 			//return { getScopes:extraScopes.union?extraScopes.union(setScopes):new Set([...extraScopes,...setScopes]), setScopes };
 			return { __proto__:null, getScopes:extraScopes, setScopes };
 		}
@@ -855,13 +856,13 @@
 		
 		static has = function execExpHas(obj,prop){
 			if(obj.silentHas) return true;
-			for(let ms of obj.mainScopes) if(Object.hasOwn(ms,prop)) return Reflect.has(ms,prop);
+			for(let ms of obj.mainScopes) if(hasOwn(ms,prop)) return Reflect.has(ms,prop);
 			for(let s of obj.getScopes){
-				if(obj.scopeUseOwn.has(s)){ if(Object.hasOwn(s,prop)) return Reflect.has(s,prop); }
+				if(obj.scopeUseOwn.has(s)){ if(hasOwn(s,prop)) return Reflect.has(s,prop); }
 				else if(prop in s) return Reflect.has(s,prop);
 			}
 			for(let ms of obj.mainScopes) if(prop in ms) return Reflect.has(ms,prop);
-			if(obj.globalObj && Object.hasOwn(obj.globalObj,prop)){
+			if(obj.globalObj && hasOwn(obj.globalObj,prop)){
 				if(obj.globalsHide) return obj.globalCatch(prop), false;
 				else return Reflect.has(obj.globalObj,prop);
 			}
@@ -870,13 +871,13 @@
 		
 		static get = function execExpGet(obj,prop,receiver){
 			if(prop===Symbol.unscopables) return obj.unscopables;
-			for(let ms of obj.mainScopes) if(Object.hasOwn(ms,prop)) return execExpressionProxy._getResolve(obj,ms,prop,ms);
+			for(let ms of obj.mainScopes) if(hasOwn(ms,prop)) return execExpressionProxy._getResolve(obj,ms,prop,ms);
 			for(let s of obj.getScopes){
-				if(obj.scopeUseOwn.has(s)){ if(Object.hasOwn(s,prop)) return execExpressionProxy._getResolve(obj,s,prop,s); }
+				if(obj.scopeUseOwn.has(s)){ if(hasOwn(s,prop)) return execExpressionProxy._getResolve(obj,s,prop,s); }
 				else if(prop in s) return execExpressionProxy._getResolve(obj,s,prop,s);
 			}
 			for(let ms of obj.mainScopes) if(prop in ms) return execExpressionProxy._getResolve(obj,ms,prop,ms);
-			if(obj.globalObj && Object.hasOwn(obj.globalObj,prop)){
+			if(obj.globalObj && hasOwn(obj.globalObj,prop)){
 				if(obj.globalsHide) return obj.globalCatch(prop), false;
 				else return execExpressionProxy._getResolve(obj,obj.globalObj,prop,obj.globalObj);
 			}
@@ -884,26 +885,26 @@
 		}
 		
 		static set = function execExpSet(obj,prop,value,receiver){
-			for(let s of obj.setScopes) if(Object.hasOwn(s,prop)) return execExpressionProxy._setResolve(obj,s,prop,value,s);
+			for(let s of obj.setScopes) if(hasOwn(s,prop)) return execExpressionProxy._setResolve(obj,s,prop,value,s);
 			for(let s of obj.mainScopes) return execExpressionProxy._setResolve(obj,s,prop,value,s);
 			return false;
 		}
 		
 		static getOwnPropertyDescriptor(obj,prop){
-			for(let s of obj.mainScopes) if(Object.hasOwn(s,prop)) return Reflect.getOwnPropertyDescriptor(s,prop);
-			for(let s of obj.getScopes) if(Object.hasOwn(s,prop)) return Reflect.getOwnPropertyDescriptor(s,prop);
+			for(let s of obj.mainScopes) if(hasOwn(s,prop)) return Reflect.getOwnPropertyDescriptor(s,prop);
+			for(let s of obj.getScopes) if(hasOwn(s,prop)) return Reflect.getOwnPropertyDescriptor(s,prop);
 			return void 0;
 		}
 		
 		static defineProperty(obj,prop,descriptor){
-			for(let s of obj.setScopes) if(Object.hasOwn(s,prop)) return Reflect.defineProperty(s,prop,{ __proto__:null, ...descriptor });
+			for(let s of obj.setScopes) if(hasOwn(s,prop)) return Reflect.defineProperty(s,prop,{ __proto__:null, ...descriptor });
 			for(let s of obj.mainScopes) return Reflect.defineProperty(s,prop,{ __proto__:null, ...descriptor });
 			return false;
 		}
 		
 		static deleteProperty(obj,prop){
-			for(let s of obj.setScopes) if(Object.hasOwn(s,prop)){ delete s[prop]; return true; }
-			for(let s of obj.mainScopes) if(Object.hasOwn(s,prop)){ delete s[prop]; return true; }
+			for(let s of obj.setScopes) if(hasOwn(s,prop)){ delete s[prop]; return true; }
+			for(let s of obj.mainScopes) if(hasOwn(s,prop)){ delete s[prop]; return true; }
 			return false;
 		}
 		
@@ -921,13 +922,13 @@
 		static construct(obj,argumentsList,newTarget){}
 		static apply(obj,thisArgument,argumentsList){}
 		static setPrototypeOf(obj,prototype){ return false; }
-		static getPrototypeOf(obj){ return Object.getPrototypeOf(obj.mainScopes[0]); }
+		static getPrototypeOf(obj){ return getPrototypeOf(obj.mainScopes[0]); }
 		static preventExtensions(obj){ return false; }
 		
 		static _getResolve = function execExpGetResolve(obj,target,prop,receiver=target){
 			let value = Reflect.get(target,prop,receiver);
 			if(obj.useSignalProxy && obj.scopeCtrl?.signalCtrl){
-				let isSignal, descriptor = Object.getOwnPropertyDescriptor(target,prop);
+				let isSignal, descriptor = getOwnPropertyDescriptor(target,prop);
 				if(descriptor?.value instanceof signalInstance) isSignal = true;
 				else if(descriptor?.get?.[signalSymb] instanceof signalInstance) isSignal = true;
 				if(descriptor && !isSignal && value===Object(value)) return obj.scopeCtrl.signalCtrl.proxySignal(value,null,true);
@@ -936,7 +937,7 @@
 		}
 		
 		static _setResolve = function execExpSetResolve(obj,target,prop,value,receiver=target){
-			let descriptor = Object.getOwnPropertyDescriptor(target,prop);
+			let descriptor = getOwnPropertyDescriptor(target,prop);
 			if(descriptor?.value instanceof signalInstance) return descriptor.value.set(value), true;
 			return Reflect.set(target,prop,value,receiver);
 		}
@@ -988,11 +989,11 @@
 			}
 			if(!sGet) sGet = signal.get.bind(signal); if(!sSet) sSet = signal.set.bind(signal);
 			sGet[signalSymb] = sSet[signalSymb] = signal;
-			Object.defineProperty(obj,prop,{ __proto__:null, configurable, enumerable, get:sGet, set:sSet });
+			defineProperty(obj,prop,{ __proto__:null, configurable, enumerable, get:sGet, set:sSet });
 			return signal;
 		}
 		assignSignals(target,source){
-			for(let [key,val] of Object.entries(source)) this.defineSignal(target,key,val,Object.getOwnPropertyDescriptor(source,key));
+			for(let [key,val] of Object.entries(source)) this.defineSignal(target,key,val,getOwnPropertyDescriptor(source,key));
 			return target;
 		}
 		computeSignal(fn,options={}){ // [ signal, observer, clear() ]
@@ -1014,7 +1015,7 @@
 			let proxy = new signalProxy(value,this,signal);
 			let sGet = ()=>(signal.record(),proxy), sSet = (v)=>{ this.defineProxySignal(obj,prop,v,signal); };
 			sGet[signalSymb] = sSet[signalSymb] = signal;
-			Object.defineProperty(obj,prop,{ __proto__:null, configurable:true, enumerable:true, get:sGet, set:sSet });
+			defineProperty(obj,prop,{ __proto__:null, configurable:true, enumerable:true, get:sGet, set:sSet });
 			return signal.record(), signal.set(proxy), proxy;
 		}
 	}
@@ -1081,7 +1082,7 @@
 	const defineWeakRef = (target,prop,value=target[prop])=>{
 		if(!window.WeakRef) return target[prop]=value, target;
 		let ref = new WeakRef(value);
-		Object.defineProperty(target,prop,{ get(){ return ref.deref(); }, set(v){ ref=new WeakRef(v); } });
+		defineProperty(target,prop,{ get(){ return ref.deref(); }, set(v){ ref=new WeakRef(v); } });
 		return target;
 	};
 	
@@ -1148,15 +1149,15 @@
 			if(typeof getValue!=='function') return [ getValue ];
 			let wrapRecordFn, wrapChangeFn;
 			if(target instanceof Object && prop==='valueOf') wrapRecordFn = true;
-			else if(isIterable && target instanceof Array && Object.hasOwn(Array.prototype,prop)){
+			else if(isIterable && target instanceof Array && hasOwn(Array.prototype,prop)){
 				if(['pop','push','reverse','shift','unshift','splice','sort','copyWithin','fill'].indexOf(prop)!==-1) wrapChangeFn = true;
 				else wrapRecordFn = true;
 			}
-			else if(isIterable && target instanceof Map && Object.hasOwn(Map.prototype,prop)){
+			else if(isIterable && target instanceof Map && hasOwn(Map.prototype,prop)){
 				if(['clear','delete','set','getOrInsert','getOrInsertComputed'].indexOf(prop)!==-1) wrapChangeFn = true;
 				else wrapRecordFn = true;
 			}
-			else if(isIterable && target instanceof Set && Object.hasOwn(Set.prototype,prop)){
+			else if(isIterable && target instanceof Set && hasOwn(Set.prototype,prop)){
 				if(['add','clear','delete'].indexOf(prop)!==-1) wrapChangeFn = true;
 				else wrapRecordFn = true;
 			}
@@ -1179,7 +1180,7 @@
 			let signal, { target, signals, signalCtrl } = obj;
 			if(signals.has(prop)) return signals.get(prop);
 			if(currentValue instanceof signalInstance) return currentValue;
-			let descriptor = Object.getOwnPropertyDescriptor(target,prop);
+			let descriptor = getOwnPropertyDescriptor(target,prop);
 			if(descriptor?.get?.[signalSymb] instanceof signalInstance) return descriptor.get[signalSymb];
 			signal = new signalInstance(signalCtrl,newValue,true);
 			signal.record(); signals.set(prop,signal);
@@ -1209,7 +1210,7 @@
 		static defineProperty(obj,prop,attributes){ return Reflect.defineProperty(obj.target,prop,attributes); }
 		static getOwnPropertyDescriptor(obj,prop){ Reflect.getOwnPropertyDescriptor(obj.target,prop); }
 		static setPrototypeOf(obj,prototype){ return Reflect.setPrototypeOf(obj.target,prototype); }
-		static getPrototypeOf(obj){ return Object.getPrototypeOf(obj.target); }
+		static getPrototypeOf(obj){ return getPrototypeOf(obj.target); }
 		static isExtensible(obj){ return Reflect.isExtensible(obj.target); }
 		static ownKeys(obj){ return Reflect.ownKeys(obj.target); }
 		static preventExtensions(obj){ return Reflect.preventExtensions(obj.target); }
@@ -1425,7 +1426,7 @@
 		execElementExpression(expression,extraScopes=null,elementScopes=null,fnOptions=null){
 			fnOptions = { __proto__:null, ...fnOptions, scopeCtrl:this.ctrl };
 			let elementContext = !fnOptions.hideDocument ? this.execContext : null;
-			if(!Object.hasOwn(fnOptions,'fnThis') && !fnOptions.hideDocument) fnOptions.fnThis = this.element;
+			if(!hasOwn(fnOptions,'fnThis') && !fnOptions.hideDocument) fnOptions.fnThis = this.element;
 			let instance = this.ctrl.scopeDomInstance;
 			// Main controller scopes
 			let mainScopes = [];
@@ -1436,12 +1437,12 @@
 			let scopeUseOwn = new WeakSet();
 			// Proto list of mainScopes, to not be in otherScopes
 			let msProtoList = new Set();
-			for(let ms of mainScopes) for(let o=ms; o && scopeAllowed(o); o=Object.getPrototypeOf(o)) msProtoList.add(o);
+			for(let ms of mainScopes) for(let o=ms; o && scopeAllowed(o); o=getPrototypeOf(o)) msProtoList.add(o);
 			// Other scopes
 			let otherScopes = new Set();
 			// Add extraScopes & it's prototypes
 			if(extraScopes?.length>0){
-				for(let s of extraScopes) for(let o=s; o && scopeAllowed(o); o=Object.getPrototypeOf(o)){
+				for(let s of extraScopes) for(let o=s; o && scopeAllowed(o); o=getPrototypeOf(o)){
 					if(!msProtoList.has(o) && !otherScopes.has(o)){
 						otherScopes.add(o);
 						scopeUseOwn.add(o);
@@ -1451,7 +1452,7 @@
 			// Add elementScopes & it's prototypes
 			if(elementScopes?.length>0) for(let [e,sArr] of elementScopes) for(let s of sArr){
 				// Add element scopes
-				for(let o=s; o && scopeAllowed(o); o=Object.getPrototypeOf(o)){
+				for(let o=s; o && scopeAllowed(o); o=getPrototypeOf(o)){
 					if(!msProtoList.has(o) && !otherScopes.has(o)){
 						otherScopes.add(o);
 						scopeUseOwn.add(o);
@@ -1460,7 +1461,7 @@
 				// Add element controller scopes
 				let eScopeCtrl = instance?._cacheElementScopeCtrls.get(e);
 				if(eScopeCtrl){
-					for(let o=eScopeCtrl.scope; o && scopeAllowed(o); o=Object.getPrototypeOf(o)){
+					for(let o=eScopeCtrl.scope; o && scopeAllowed(o); o=getPrototypeOf(o)){
 						if(!msProtoList.has(o) && !otherScopes.has(o)){
 							otherScopes.add(o);
 							scopeUseOwn.add(o);
