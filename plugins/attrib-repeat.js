@@ -307,7 +307,7 @@
 			if(!exec) state.exec = exec = instance._elementExecExp(state.scopeCtrl,exp,null,{ silentHas:true, useReturn:true, run:false });
 			let execResult = exec.runFn();
 			// Resolve Signal
-			if(execResult instanceof this.scopeDom.signalInstance) execResult = execResult.get();
+			execResult = this.scopeDom.resolveSignal(execResult);
 			// Handle fallback when Promise on first update
 			if(state.itemsArr===null && execResult instanceof Promise){
 				this._handleRepeatDOM(plugInfo,state,updateIndex,[]);
@@ -329,7 +329,7 @@
 			// Update state
 			element.$repeatResult = elementAnchor.$repeatResult = execResult;
 			// Resolve Signal
-			if(execResult instanceof this.scopeDom.signalInstance) execResult = execResult.get();
+			execResult = this.scopeDom.resolveSignal(execResult);
 			// Convert list into entries [[key,value],...]
 			let itemsArr = [], domArr = [], anchorArr = [], isArr=false;
 			if(execResult instanceof Map){ itemsArr=Object.entries(execResult); }

@@ -199,6 +199,7 @@
 			// State
 			onlyOnce=(onlyOnce.value===true); domRemove=(domRemove.value===true); //domOnce=(domOnce.value===true);
 			let state = { __proto__:null,
+				signalCtrl: elementScopeCtrl.ctrl.signalCtrl, signalObs:null,
 				element, isOnlyMatch, ifValue, ifElseValue, ifMatchValue, ifCaseValue, matchOpts, depList:null,
 				options:{ __proto__:null, onlyOnce, domRemove, onShowEvent, onHideEvent, defaultValue },
 				showing:null, exec:null, execMatch:null, anchor:null, defaultDisplay:null, onShowExec:null, onHideExec:null, updateIndex:0,
@@ -231,14 +232,16 @@
 			return (onlyOnce && exec);
 			//return (onlyOnce && exec) && ((domRemove && anchor) || (!domRemove && defaultDisplay!==null));
 		}
-		_execExpression(plugInfo,exp,useReturn=true,extra=null){
+		_execExpression(plugInfo,exp,useReturn=true,extra=null,signalObs=null){
 			if(!(exp?.length>0)) return null;
-			return this.instance._elementExecExp(plugInfo.elementScopeCtrl,exp,{ __proto__:null, $expression:exp, ...extra },{ silentHas:true, useReturn, run:false });
+			let exec = this.instance._elementExecExp(plugInfo.elementScopeCtrl,exp,{ __proto__:null, $expression:exp, ...extra },{ silentHas:true, useReturn, run:false });
+			if(signalObs) exec.runFn = signalObs.wrapRecorder(exec.runFn);
+			return exec;
 		}
-		_runIfExpressions(plugInfo,attrib,state,exp,runMatch=true){
+		_runIfExpressions(plugInfo,attrib,state,exp,runMatch=true,updateOthers=false){
 			let { instance, isElementLoaded } = this;
 			let { element, elementScopeCtrl, attribs } = plugInfo;
-			let { ifValue, ifElseValue, ifMatchValue, ifCaseValue, options, depList, showing:wasShowing, exec, anchor, updateIndex, isTemplate } = state;
+			let { signalObs, ifValue, ifElseValue, ifMatchValue, ifCaseValue, options, depList, showing:wasShowing, exec, anchor, updateIndex, isTemplate } = state;
 			let { onShowEvent, onHideEvent } = options;
 			if(!this.stateMap.has(element)) return;
 			if(this._hasRanOnce(state)) return;
@@ -273,18 +276,28 @@
 			if(result===null){
 				let execExtra = null;
 				if(exp?.length>0 && ifCaseValue?.length>0 && ifCaseValue===exp) execExtra = matchCaseScope;
-				if(!exec) state.exec = exec = this._execExpression(plugInfo,exp,true,execExtra);
+				if(!signalObs){
+					signalObs = state.signalObs = (signalObs || state.signalCtrl.createObserver());
+					let self=this; signalObs.addListener(function pluginIf_signalObserver(){
+						let updateIndex = state.updateIndex;
+						self.scopeDom.onceRAF(element,signalObs,function pluginIf_signalObserver_RAF(){
+							if(state.updateIndex!==updateIndex) return;
+							self._runIfExpressions(plugInfo,attrib,state,exp,runMatch,true);
+						});
+					});
+				}
+				if(!exec) exec = state.exec = this._execExpression(plugInfo,exp,true,execExtra,signalObs);
 				result = element.$ifResult = exec.runFn();
 			}
-			this._handleResult(plugInfo,attrib,state,exp,updateIndex,runMatch,false,result);
+			this._handleResult(plugInfo,attrib,state,exp,updateIndex,runMatch,updateOthers,result);
 		}
 		
 		_handleResult(plugInfo,attrib,state,exp,updateIndex,runMatch,updateOthers,result){
-			let { ifValue, ifElseValue, ifMatchValue, ifCaseValue, isTemplate, execMatch, options:{ matchOnce, defaultValue } } = state;
+			let { signalObs, ifValue, ifElseValue, ifMatchValue, ifCaseValue, isTemplate, execMatch, options:{ matchOnce, defaultValue } } = state;
 			// Ignore old results
 			if(state.updateIndex>updateIndex) return;
 			// Resolve Signal
-			if(result instanceof this.scopeDom.signalInstance) result = result.get();
+			result = this.scopeDom.resolveSignal(result,signalObs);
 			// If result is promise, use default & handleResult when settled
 			if(result instanceof Promise){
 				// Fallback / Default Value
@@ -314,14 +327,21 @@
 				if(!execMatch){
 					firstRun = true;
 					if(ifMatch===null) ifMatch = `this`;
-					execMatch = state.execMatch = this.instance._elementExecExp(this.instance._elementScopeCtrl(matchElement),ifMatch,{ $expression:ifMatch },{ silentHas:true, useReturn:true, run:false, fnThis:null }); // fnThis:null sets 'this' as proxy
+					execMatch = state.execMatch = this.instance._elementExecExp(this.instance._elementScopeCtrl(matchElement),ifMatch,{ __proto__:null, $expression:ifMatch },{ silentHas:true, useReturn:true, run:false, fnThis:null }); // fnThis:null sets 'this' as proxy
+					if(signalObs) execMatch.runFn = signalObs.wrapRecorder(execMatch.runFn);
 				}
 				matchResult = execMatch.result;
+				// Resolve Signal
+				execMatch.result = this.scopeDom.resolveSignal(execMatch.result,signalObs);
+				// Resolve Promise
 				if(execMatch.result instanceof Promise && Object.hasOwn(execMatch.result,matchCasePromiseResultSymbol)) matchResult = execMatch.result[matchCasePromiseResultSymbol];
 				if(execMatch.result instanceof Promise && execMatch.result?.[matchCasePromiseWaitSymbol]) matchResult = defaultValue;
+				// Run if needed
 				else if(firstRun || (runMatch!==false && !matchOnce)){
-					console.log({ firstRun, runMatch, matchOnce });
 					matchResult = execMatch.result = execMatch.runFn();
+					// Resolve Signal
+					execMatch.result = this.scopeDom.resolveSignal(execMatch.result,signalObs);
+					// Resolve Promise
 					if(execMatch.result instanceof Promise && Object.hasOwn(execMatch.result,matchCasePromiseResultSymbol)) matchResult = execMatch.result[matchCasePromiseResultSymbol];
 					else if(execMatch.result instanceof Promise && execMatch.result?.[matchCasePromiseWaitSymbol]) matchResult = defaultValue;
 					else if(execMatch.result instanceof Promise){
@@ -335,7 +355,11 @@
 					}
 				}
 				// Check Match Case
-				if(result!==false) result = this._matchCase(matchResult,result);
+				if(result!==false){
+					let obsRecording = signalObs && signalObs.startRecording();
+					result = this._matchCase(matchResult,result,signalObs);
+					if(obsRecording) signalObs.stopRecording();
+				}
 			}
 			// Continue with result
 			if(isTemplate) this._handleTemplateIfResult(plugInfo,attrib,state,exp,updateIndex,result);
@@ -359,6 +383,9 @@
 		_matchCase(matchObj,caseObj){
 			try{
 				//console.log('_matchCase',typeof matchObj,matchObj,typeof caseObj,caseObj);
+				// Resolve Signals
+				matchObj = this.scopeDom.resolveSignal(matchObj);
+				caseObj = this.scopeDom.resolveSignal(caseObj);
 				// Equals
 				if(matchObj===caseObj) return true;
 				if(typeof caseObj==='string' || typeof caseObj==='number' || typeof caseObj==='boolean') return false;

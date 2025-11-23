@@ -530,7 +530,7 @@
 			if(obj.updateIndex>updateIndex) return;
 			obj.updateIndex++;
 			// Result Types
-			if(result instanceof this.scopeDom.signalInstance){ signalObs.recordSignal(result); result = result.get(); }
+			result = this.scopeDom.resolveSignal(result,signalObs);
 			if(result instanceof Error) result = options.onError;
 			if(result instanceof Node){
 				let validNode = true;
@@ -562,7 +562,7 @@
 		
 		_updateAttribute(element,attribute,result,obj,state,updateIndex,signalObs){
 			let { options } = state;
-			if(result instanceof this.scopeDom.signalInstance){ signalObs.recordSignal(result); result = result.get(); }
+			result = this.scopeDom.resolveSignal(result,signalObs);
 			if(result instanceof Promise){
 				let onSuccess = (result)=>this._updateAttribute(element,attribute,result,obj,state,updateIndex,signalObs);
 				let onError = ()=>this._updateAttribute(element,attribute,options.onError,obj,state,updateIndex,signalObs);
@@ -590,7 +590,7 @@
 			if(obj.updateIndex>updateIndex) return;
 			obj.updateIndex++;
 			// Result Types
-			if(result instanceof this.scopeDom.signalInstance){ signalObs.recordSignal(result); result = result.get(); }
+			result = this.scopeDom.resolveSignal(result,signalObs);
 			if(result instanceof Error) result = options.onError;
 			if(result instanceof NodeList){ let e=document.createDocumentFragment(); for(let n of [...result])e.appendChild(n); result=e; }
 			else if(result instanceof HTMLCollection){ let e=document.createDocumentFragment(); for(let n of [...result])e.appendChild(n); result=e; }
