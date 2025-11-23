@@ -3,6 +3,8 @@
 (()=>{
 	function noopFn(){}; async function noopAsyncFn(){};
 	
+	const deferFn = Promise.prototype.then.bind(Promise.resolve());
+	
 	// Call multiple callbacks on Animation Frame
 	let rAFList=new Set(), onceRAFList=new Map(), isDuringRAF=false, isScheduled=false;
 	function _scheduledRAF(){
@@ -12,7 +14,7 @@
 		let list2=[...onceRAFList.values()]; onceRAFList.clear();
 		for(let s of list2) for(let [k,cb] of s) try{ cb(); }catch(err){ console.error(err); }
 		isScheduled = false;
-		Promise.resolve().then(()=>{ isDuringRAF=false; });
+		deferFn(()=>{ isDuringRAF=false; });
 	};
 	function requestAF(cb){
 		rAFList.add(cb);
@@ -233,7 +235,7 @@
 				this._duringOnReady = true;
 				for(const cb of list) try{ cb(); }catch(err){ console.error(err); }
 				this.controller.$emit("$update");
-				Promise.resolve().then(()=>{ this._duringOnReady=false; });
+				deferFn(()=>{ this._duringOnReady=false; });
 			}
 			if(this._onDOMReadyListeners && domComplete){
 				let list = this._onDOMReadyListeners.values();
@@ -244,12 +246,12 @@
 		}
 		onReady(cb,delay=true){
 			if(this._onReadyListeners) this._onReadyListeners.add(cb);
-			else if(delay) Promise.resolve().then(cb);
+			else if(delay) deferFn(cb);
 			else cb();
 		}
 		onDOMReady(cb,delay=true){
 			if(this._onDOMReadyListeners) this._onDOMReadyListeners.add(cb);
-			else if(delay) Promise.resolve().then(cb);
+			else if(delay) deferFn(cb);
 			else cb();
 		}
 		
@@ -576,7 +578,7 @@
 								queue.push(function attribConnect(){
 									if(raf && !isDuringRAF) onceRAF(element,$attribute,connectCB);
 									else if(instant) connectCB();
-									else Promise.resolve().then(connectCB);
+									else deferFn(connectCB);
 								});
 								continue;
 							}
@@ -631,7 +633,7 @@
 									if(isDuringRAF || self._duringOnReady) eventCB();
 									else if(raf) onceRAF(element,$attribute,eventCB);
 									else if(instant) eventCB();
-									else Promise.resolve().then(eventCB);
+									else deferFn(eventCB);
 									if(pd) return false;
 								};
 								// Register events straight away
@@ -667,7 +669,7 @@
 								let { runFn:disconnectCB } = this._elementExecExp(elementScopeCtrl,value,{ __proto__:null, $attribute },{ __proto__:null, run:false });
 								if(raf && !isDuringRAF) requestAF(disconnectCB);
 								else if(instant || isDuringRAF) disconnectCB();
-								else Promise.resolve().then(disconnectCB);
+								else deferFn(disconnectCB);
 								continue;
 							}
 						}
@@ -1118,7 +1120,7 @@
 				this.$emit(evt+':before'); this.$emit(evt); this.$emit(evt+':after');
 				this.isDuringUpdate = false;
 			};
-			if(isDuringRAF || this.scopeDomInstance._duringOnReady || this.isDuringUpdate){ Promise.resolve().then(emitUpdate); }
+			if(isDuringRAF || this.scopeDomInstance._duringOnReady || this.isDuringUpdate){ deferFn(emitUpdate); }
 			else onceRAF(this.scope,evt,emitUpdate,true);
 		}
 		
@@ -1278,7 +1280,7 @@
 				this.$emitDomChildren(evt+':before',u,u,emitSelf); this.$emitDomChildren(evt,u,u,emitSelf); this.$emitDomChildren(evt+':after',u,u,emitSelf);
 				this.isDuringUpdateDom = false;
 			};
-			if(isDuringRAF){ Promise.resolve().then(emitUpdate); }
+			if(isDuringRAF){ deferFn(emitUpdate); }
 			else onceRAF(this.element,evt,emitUpdate,true);
 		}
 		
