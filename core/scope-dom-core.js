@@ -780,7 +780,7 @@
 	
 	class scopeBase {
 		constructor(){ return Object.create(null,{
-			__proto__: {},
+			__proto__: { __proto__:null, value:null },
 			$scope:{ __proto__:null, configurable:false, enumerable:!true, get(){ return this; } }
 		}); }
 	}
@@ -867,22 +867,22 @@
 		
 		static get = function execExpGet(obj,prop,receiver){
 			if(prop===Symbol.unscopables) return obj.unscopables;
-			for(let ms of obj.mainScopes) if(Object.hasOwn(ms,prop)) return execExpressionProxy._getResolve(ms,prop,ms);
+			for(let ms of obj.mainScopes) if(Object.hasOwn(ms,prop)) return execExpressionProxy._getResolve(obj,ms,prop,ms);
 			for(let s of obj.getScopes){
-				if(obj.scopeUseOwn.has(s)){ if(Object.hasOwn(s,prop)) return execExpressionProxy._getResolve(s,prop,s); }
-				else if(prop in s) return execExpressionProxy._getResolve(s,prop,s);
+				if(obj.scopeUseOwn.has(s)){ if(Object.hasOwn(s,prop)) return execExpressionProxy._getResolve(obj,s,prop,s); }
+				else if(prop in s) return execExpressionProxy._getResolve(obj,s,prop,s);
 			}
-			for(let ms of obj.mainScopes) if(prop in ms) return execExpressionProxy._getResolve(ms,prop,ms);
+			for(let ms of obj.mainScopes) if(prop in ms) return execExpressionProxy._getResolve(obj,ms,prop,ms);
 			if(obj.globalObj && Object.hasOwn(obj.globalObj,prop)){
 				if(obj.globalsHide) return obj.globalCatch(prop), false;
-				else return execExpressionProxy._getResolve(obj.globalObj,prop,obj.globalObj);
+				else return execExpressionProxy._getResolve(obj,obj.globalObj,prop,obj.globalObj);
 			}
 			return void 0;
 		}
 		
 		static set = function execExpSet(obj,prop,value,receiver){
-			for(let s of obj.setScopes) if(Object.hasOwn(s,prop)) return execExpressionProxy._setResolve(s,prop,value,s);
-			for(let s of obj.mainScopes) return execExpressionProxy._setResolve(s,prop,value,s);
+			for(let s of obj.setScopes) if(Object.hasOwn(s,prop)) return execExpressionProxy._setResolve(obj,s,prop,value,s);
+			for(let s of obj.mainScopes) return execExpressionProxy._setResolve(obj,s,prop,value,s);
 			return false;
 		}
 		
@@ -915,13 +915,19 @@
 			return Array.from(obj.setScopes).length>0;
 		}
 		
-		static _getResolve(target,prop,receiver){
+		static construct(obj,argumentsList,newTarget){}
+		static apply(obj,thisArgument,argumentsList){}
+		static setPrototypeOf(obj,prototype){ return false; }
+		static getPrototypeOf(obj){ return Object.getPrototypeOf(obj.mainScopes[0]); }
+		static preventExtensions(obj){ return false; }
+		
+		static _getResolve = function execExpGetResolve(obj,target,prop,receiver=target){
 			let value = Reflect.get(target,prop,receiver);
 			// if(value instanceof signalInstance) return value.get();
 			return value;
 		}
 		
-		static _setResolve(target,prop,value,receiver){
+		static _setResolve = function execExpSetResolve(obj,target,prop,value,receiver=target){
 			let descriptor = Object.getOwnPropertyDescriptor(target,prop);
 			if(descriptor?.value instanceof signalInstance) return descriptor.value.set(value), true;
 			else if(descriptor?.set?.[signalSymb] instanceof signalInstance) return descriptor.set(value), true;
