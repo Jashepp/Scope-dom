@@ -61,6 +61,15 @@ export const nativeConstructors = nativeProtos.map(p=>p?.constructor);
 export function isNative(obj){ return nativeProtos.indexOf(obj)!==-1 || nativeConstructors.indexOf(obj)!==-1; }
 export function scopeAllowed(obj){ return obj && !isNative(obj); }
 
+
+export const defineWeakRef = (target,prop,value=target[prop])=>{
+	if(!window.WeakRef) return target[prop]=value, target;
+	let ref = new WeakRef(value);
+	defineProperty(target,prop,{ get(){ return ref.deref(); }, set(v){ ref=new WeakRef(v); } });
+	return target;
+};
+
+
 export const isElementLoaded = (()=>{
 	let domState=0, listener = ()=>{
 		if(document.readyState==='interactive') domState=1;
@@ -85,6 +94,7 @@ export function setAttribute(target,name,value){ // Set attribute with less name
 		target.attributes.setNamedItem(a);
 	}
 }
+
 
 export class eventRegistry {
 	constructor(){

@@ -5,7 +5,7 @@ import {
 	elementNodeType, commentNodeType, textNodeType,
 	getPrototypeOf, getOwnPropertyDescriptor, defineProperty, hasOwn,
 	objectProto, nodeProto, elementProto, functionProto, functionAsyncProto, nativeProtos, nativeConstructors,
-	isNative, scopeAllowed,
+	isNative, scopeAllowed, defineWeakRef,
 	isElementLoaded, setAttribute, eventRegistry,
 } from "./utils.js";
 import {
@@ -150,13 +150,6 @@ export class signalObserver {
 	removeListener(fn){ this.listeners.delete(fn); }
 	clear(){ this.listeners.clear(); this.signals=new WeakSet(); }
 }
-
-export const defineWeakRef = (target,prop,value=target[prop])=>{
-	if(!window.WeakRef) return target[prop]=value, target;
-	let ref = new WeakRef(value);
-	defineProperty(target,prop,{ get(){ return ref.deref(); }, set(v){ ref=new WeakRef(v); } });
-	return target;
-};
 
 const spProxyMap = new WeakMap(), spTargetMap = new WeakMap();
 export class signalProxy {

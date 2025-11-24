@@ -5,11 +5,11 @@ import {
 	elementNodeType, commentNodeType, textNodeType,
 	getPrototypeOf, getOwnPropertyDescriptor, defineProperty, hasOwn,
 	objectProto, nodeProto, elementProto, functionProto, functionAsyncProto, nativeProtos, nativeConstructors,
-	isNative, scopeAllowed,
+	isNative, scopeAllowed, defineWeakRef,
 	isElementLoaded, setAttribute, eventRegistry,
 } from "./utils.js";
 import {
-	signalController, signalObserver, defineWeakRef, signalProxy, signalInstance, resolveSignal,
+	signalController, signalObserver, signalProxy, signalInstance, resolveSignal,
 } from "./signal.js";
 import {
 	scopeExpressionContext, scopeInstance, scopeBase, scopeControllerContext, scopeController, scopeElementContext, scopeElementController,
