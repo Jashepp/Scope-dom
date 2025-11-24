@@ -94,7 +94,7 @@ export class signalController {
 
 export class signalObserver {
 	constructor(signalCtrl,options={}){
-		options = { __proto__:null, defer:signalCtrl?.scopeDomInstance?._options?.signalDefer, ...options };
+		options = { __proto__:null, defer:signalCtrl?.scopeDomInstance?.options?.signalDefer, ...options };
 		this.ctrl = signalCtrl;
 		this.signals = new WeakSet();
 		this.signalsIgnore = new WeakSet();

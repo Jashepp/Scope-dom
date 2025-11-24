@@ -45,17 +45,17 @@
 		#app ._items ._item *:last-of-type { margin-right:0.5rem; }
 		#app ._items ._item:first-of-type { border-top:none; }
 	</style>
-	<script type="text/javascript" src="/core/scope-dom-core.js"></script>
-	<script type="text/javascript" src="/plugins/attrib-cloak.js"></script>
-	<script type="text/javascript" src="/plugins/attrib-parse.js"></script>
-	<script type="text/javascript" src="/plugins/attrib-if.js"></script>
-	<script type="text/javascript" src="/plugins/attrib-repeat.js"></script>
-	<!-- <script type="module" src="/plugins/attrib-parse.js"></script>
-	<script type="module" src="/plugins/attrib-if.js"></script>
-	<script type="module" src="/plugins/attrib-repeat.js"></script> -->
+	<script type="text/javascript" src="/dist/scopedom.umd.js"></script>
+	<script type="text/javascript" src="/dist/plugins/attrib-cloak.js"></script>
+	<script type="text/javascript" src="/dist/plugins/attrib-parse.js"></script>
+	<script type="text/javascript" src="/dist/plugins/attrib-if.js"></script>
+	<script type="text/javascript" src="/dist/plugins/attrib-repeat.js"></script>
+	<!-- <script type="module" src="/dist/plugins/attrib-parse.js"></script>
+	<script type="module" src="/dist/plugins/attrib-if.js"></script>
+	<script type="module" src="/dist/plugins/attrib-repeat.js"></script> -->
 	<script type="text/javascript">
 		scopeDom.init({ globalContext:false, documentContext:true, documentDefaultView:false });
-		scopeDom.instance.scopeController(function({ scope:$scope, instance, controller }){
+		scopeDom.controller(function({ scope:$scope, instance, controller }){
 			Object.assign($scope,{ Date, Promise:Promise.bind(window), setTimeout:setTimeout.bind(window), console })
 			let list = $scope.list = [];
 			$scope.done = 0;

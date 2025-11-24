@@ -45,6 +45,11 @@ export class animFrameHelper {
 export function regexMatchAll(str,r){ return str.matchAll(r); } // matchAll clones regex, and doesn't need lastIndex=0
 export function regexExec(str,r){ r.lastIndex=0; return r.exec(str); };
 export function regexTest(str,r){ r.lastIndex=0; return r.test(str); };
+export function regexMatchAllFirstGroup(str,regex){
+	let match, matches=[]; regex.lastIndex=0;
+	while(match=regex.exec(str)) matches.push(match[1]);
+	return matches;
+}
 
 
 export const elementNodeType = document.ELEMENT_NODE;

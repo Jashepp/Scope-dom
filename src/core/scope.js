@@ -79,7 +79,7 @@ export class scopeController {
 		this.scope = new scopeInstance(scopeObj,this);
 		this.execContext = new scopeControllerContext(this);
 		this.isDuringUpdate = false;
-		this.signalCtrl = scopeDomInstance?.controller?.signalCtrl || parentCtrl?.signalCtrl || new signalController(this);
+		this.signalCtrl = scopeDomInstance?.scopeCtrl?.signalCtrl || parentCtrl?.signalCtrl || new signalController(this);
 	}
 	
 	$emitScopeUpdate(suffix=''){
@@ -89,7 +89,7 @@ export class scopeController {
 			this.$emit(evt+':before'); this.$emit(evt); this.$emit(evt+':after');
 			this.isDuringUpdate = false;
 		};
-		if(animFrameHelper.isDuringRAF || this.scopeDomInstance._duringOnReady || this.isDuringUpdate){ deferFn(emitUpdate); }
+		if(animFrameHelper.isDuringRAF || this.scopeDomInstance.isDuringOnReady || this.isDuringUpdate){ deferFn(emitUpdate); }
 		else animFrameHelper.onceRAF(this.scope,evt,emitUpdate,true);
 	}
 	
@@ -220,7 +220,7 @@ export class scopeElementController {
 				}
 			}
 			// Add element controller scopes
-			let eScopeCtrl = instance?._cacheElementScopeCtrls.get(e);
+			let eScopeCtrl = instance?.cacheElementScopeCtrls.get(e);
 			if(eScopeCtrl){
 				for(let o=eScopeCtrl.scope; o && scopeAllowed(o); o=getPrototypeOf(o)){
 					if(!msProtoList.has(o) && !otherScopes.has(o)){
@@ -244,7 +244,7 @@ export class scopeElementController {
 	$emitDomUpdate(suffix='',emitSelf=false){
 		if(this.isDuringUpdateDom) return; // Ignore DOM Update during DOM Update (for same element)
 		if(this.ctrl.isDuringUpdate) return; // Ignore DOM Update during Scope Update
-		if(this.scopeDomInstance._duringOnReady) return; // Ignore DOM Update during On Ready
+		if(this.scopeDomInstance.isDuringOnReady) return; // Ignore DOM Update during On Ready
 		let evt='$update'+(suffix?.length>0?'-'+suffix:''), u=void 0, emitUpdate=()=>{
 			if(this.isDuringUpdateDom) return;
 			this.isDuringUpdateDom = true;

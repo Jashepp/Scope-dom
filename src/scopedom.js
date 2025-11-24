@@ -1,7 +1,7 @@
 
 import {
 	noopFn, noopAsyncFn, deferFn,
-	animFrameHelper, regexMatchAll, regexExec, regexTest,
+	animFrameHelper, regexMatchAll, regexExec, regexTest, regexMatchAllFirstGroup,
 	elementNodeType, commentNodeType, textNodeType,
 	getPrototypeOf, getOwnPropertyDescriptor, defineProperty, hasOwn,
 	objectProto, nodeProto, elementProto, functionProto, functionAsyncProto, nativeProtos, nativeConstructors,
@@ -26,7 +26,7 @@ const disableDocumentDefaultView = ()=>{
 	catch(e){ console.warn("scopeDom: Failed to disable document.defaultView\n",e); }
 }
 
-const initDefaults = {
+const optionsDefaults = {
 	attribRegexMatch: /^\$((?:[\w\d]+)(?:\-[\w\d]+)*?)(?:\:((?:[\w\d]+)(?:\-[\w\d]+)*?))?$/, // group1: name, group2: option
 	attribRegexParts: /([\w\d]+)/g,
 	attribIgnore: '$ignore',
@@ -38,63 +38,89 @@ const initDefaults = {
 	attributeAliasNameKeys: null,
 	autoReady: true,
 	element: null,
-	once: true, // Prevent further scopeDom instances
+	onlyInstance: true, // Prevent further instances
+	privateInstance: false, // Enforces use of direct instance reference & prevent late plugins
+	allowLatePlugins: true, // Prevent pluginAdd after scopeDom init (defaults to false on privateInstance)
 	signalDefer: true,
 	signalProxyAll: false,
 };
+const allInstances = new Set();
 let mainInstance = null;
-let singleInstance = null;
+let onlyInstance = null;
+let pluginsPostMain = null;
 
 class scopeDom {
 	
-	static get instance(){
+	static init(options=null){
+		if(mainInstance) throw new Error("scopeDom: main instance is already initialised");
+		let instance = new scopeDom(options);
+		return instance.beginDomWatching(), instance;
+	}
+
+	static getInstance(){
+		if(!mainInstance) throw new Error("scopeDom: no main instance, use scopeDom.init");
+		if(mainInstance.options.privateInstance) throw new Error("scopeDom: main instance is private, directly reference that instance instead");
 		return mainInstance;
 	}
-	
-	static init(options={}){
-		if(mainInstance) throw new Error("scopeDom: main instance already initialised");
-		if(singleInstance) throw new Error("scopeDom: single instance already initialised");
-		let inst = mainInstance = new scopeDom(options);
-		return inst._beginDomWatching(), inst;
+
+	static controller(name,fn){
+		return getInstance().controller(name,fn);
 	}
 	
-	constructor(options={}){
-		if(singleInstance) throw new Error("scopeDom: single instance already constructed");
-		this._options = options = { __proto__:null, ...initDefaults, ...options };
-		Object.freeze(this._options);
-		if(options.once) singleInstance = this;
+	static pluginAdd(plugin){
+		if(mainInstance && !mainInstance.options.allowLatePlugins) throw new Error("scopeDom: late plugin adding is disabled, due to main instance { allowLatePlugins:false }");
+		for(let inst of allInstances){
+			if(inst.options.allowLatePlugins) inst.pluginAdd(plugin) || console.error("scopeDom: failed to add plugin to an instance");
+		}
+		return true;
+	}
+	
+	constructor(initOptions={}){
+		if(onlyInstance) throw new Error("scopeDom: a private instance is already initialised");
+		initOptions = { __proto__:null, ...initOptions };
+		let options = this.options = { __proto__:null, ...optionsDefaults, ...initOptions };
 		if(!options.globalContext && options.documentContext && !options.documentDefaultView && window.document) disableDocumentDefaultView();
 		else if(options.globalContext && !options.documentContext) throw new Error("scopeDom: For documentContext to be false, globalContext must also be false");
+		if(options.onlyInstance && mainInstance) throw new Error("scopeDom: only the main (first) instance can use { onlyInstance:true }");
+		if(options.onlyInstance) onlyInstance = this;
+		if(!mainInstance) mainInstance = this;
+		allInstances.add(this);
 		let scope = options.scope===Object(options.scope) ? options.scope : new scopeBase();
-		if(!hasOwn(scope,'$scope')) defineProperty(scope,'$scope',{ __proto__:null, get(){ return this; } });
 		this.mainElement = options.element || null;
-		this.controller = new scopeController(scope,null,null,false,this);
-		this.namedScopeControllers = new Map();
-		this._cacheWatchObservers = new Map();
-		this._cacheConnectedNodes = new WeakSet();
-		this._pendingConnectNodes = new Set();
-		this._pendingOnElementLoaded = new Map();
-		this._cacheElementScopeCtrls = new WeakMap();
-		this._cacheElementAttribs = new WeakMap();
-		this._cacheElementAttribsDefaults = new WeakMap();
-		this._ignoreNodes = new WeakSet();
-		this._elementRelatedEventListeners = new WeakMap();
-		this._elementExtraScopes = new WeakMap(); // element -> array -> objects/elements
-		this._elementIsolatedScopes = new WeakSet();
-		this._onReadyListeners = new Set();
-		this._onDOMReadyListeners = new Set();
-		this._duringOnReady = false;
-		this._plugins = { init:false, register:new Set(), onConnect:new Set(), onDisconnect:new Set(), onPluginAdd:new Set() };
-		this._initPlugins();
+		this.scopeCtrl = new scopeController(scope,null,null,false,this);
+		this.namedControllers = new Map();
+		this.cacheWatchObservers = new Map();
+		this.cacheConnectedNodes = new WeakSet();
+		this.pendingConnectNodes = new Set();
+		this.pendingOnElementLoaded = new Map();
+		this.cacheElementScopeCtrls = new WeakMap();
+		this.cacheElementAttribs = new WeakMap();
+		this.cacheElementAttribsDefaults = new WeakMap();
+		this.ignoreNodes = new WeakSet();
+		this.elementRelatedEventListeners = new WeakMap();
+		this.elementExtraScopes = new WeakMap(); // element -> array -> objects/elements
+		this.elementIsolatedScopes = new WeakSet();
+		this.onReadyListeners = new Set();
+		this.onDOMReadyListeners = new Set();
+		this.isDuringOnReady = false;
+		// Plugins
+		this.plugins = { init:false, register:new Set(), onConnect:new Set(), onDisconnect:new Set(), onPluginAdd:new Set() };
+		try{ this.initPlugins(); }catch(err){ console.error("scopeDom: error during initPlugins:",err); }
+		if(mainInstance===this){
+			pluginsPostMain = new Set();
+			for(let p of Object.values(window.scopeDomPlugins)) pluginsPostMain.add(p);
+		}
+		if(options.privateInstance && !('allowLatePlugins' in initOptions)) options.allowLatePlugins = false;
+		Object.freeze(this.options);
 	}
 	
-	_beginDomWatching(){
+	beginDomWatching(){
 		let mutObs=null, onMainElement=()=>{
 			if(!this.mainElement) this.mainElement=document.body;
 			if(mutObs) mutObs.disconnect();
 			this.watchDomTree(this.mainElement);
 			this.scanDomTree(this.mainElement);
-			if(this._options.autoReady){
+			if(this.options.autoReady){
 				this.setReadyOnDomLoaded();
 				this.setReadyOnRaf();
 			}
@@ -108,50 +134,50 @@ class scopeDom {
 	}
 	
 	// Scope Handling
-	scopeController(name,fn){
-		if(typeof name==="function") return this.scopeController(null,name);
+	controller(name,fn){
+		if(typeof name==="function") return this.controller(null,name);
 		if(name===null || name===false || name===void 0) name = null;
 		if(fn===null || fn===false || fn===void 0) fn = null;
 		if(name===null && fn===null){ // Disable/Empty default scopeController
-			this.namedScopeControllers.set(null,{ __proto__:null, element:null, name, fn });
+			this.namedControllers.set(null,{ __proto__:null, element:null, name, fn });
 			return;
 		}
-		if(!(typeof fn==="function")) throw new Error("scopeDom: scopeController params must be (name,function) or (function)");
+		if(!(typeof fn==="function")) throw new Error("scopeDom: controller params must be (name,function) or (function)");
 		if(name!==null) name = ''+name;
-		if(this.namedScopeControllers.has(name)) throw new Error(`scopeDom: scopeController ${name===null?'default':`"${name}"`} already exists`);
+		if(this.namedControllers.has(name)) throw new Error(`scopeDom: controller '${name===null?'default':`"${name}"`}' already exists, specify a different name`);
 		let ctrl = { __proto__:null, element:null, name, fn };
-		this.namedScopeControllers.set(name,ctrl);
+		this.namedControllers.set(name,ctrl);
 		// Default Controller
 		if(name===null){
-			let scope = this.controller.scope;
+			let scope = this.scopeCtrl.scope;
 			let setScopes=new Set(); for(let s=scope; s && s!==Object; s=getPrototypeOf(s)) setScopes.add(s); 
-			let proxy = new execExpressionProxy({ __proto__:null, mainScopes:[scope], getScopes:new Set([this.controller.execContext,scope]), setScopes, silentHas:false });
+			let proxy = new execExpressionProxy({ __proto__:null, mainScopes:[scope], getScopes:new Set([this.scopeCtrl.execContext,scope]), setScopes, silentHas:false });
 			return this.handleScopeCtrlFn(proxy,fn);
 		}
 	}
 	handleScopeCtrlFn(proxy,fn){
-		let signal = this.controller.$signal.bind(this.controller); // signal(value) : [get,set,signal]
-		let signalCtrl = this.controller.signalCtrl, signalMethods = Object.fromEntries(
+		let signal = this.scopeCtrl.$signal.bind(this.scopeCtrl); // signal(value) : [get,set,signal]
+		let signalCtrl = this.scopeCtrl.signalCtrl, signalMethods = Object.fromEntries(
 			['createSignal','defineSignal','assignSignals','computeSignal','proxySignal','defineProxySignal']
 			.map(k=>[k,signalCtrl[k].bind(signalCtrl)])
 		);
-		return fn.apply(proxy,[{ scope:proxy, instance:this, controller:this.controller, signal, ...signalMethods }]);
+		return fn.apply(proxy,[{ scope:proxy, instance:this, controller:this.scopeCtrl, signal, ...signalMethods }]);
 	}
 	
 	// Element Scanning & Watching
-	get scanDomTree(){ return this._connectElementAndChildren; }
+	scanDomTree(...args){ return this.connectElementAndChildren(...args); }
 	watchDomTree(element){
-		if(this._cacheWatchObservers.has(element)) return;
+		if(this.cacheWatchObservers.has(element)) return;
 		let self=this, mutObs=new MutationObserver(function domWatching(muts){
 			let check=false;
 			for(let m of muts){
 				if(m.addedNodes.size>0) check=true;
-				for(let e of m.addedNodes) self._connectElementAndChildren(e,void 0,void 0,true);
-				for(let e of m.removedNodes) self._disconnectElementAndChildren(e);
+				for(let e of m.addedNodes) self.connectElementAndChildren(e,void 0,void 0,true);
+				for(let e of m.removedNodes) self.disconnectElementAndChildren(e);
 			}
-			if(check) this._checkPendingConnectElements();
+			if(check) this.checkPendingConnectElements();
 		});
-		this._cacheWatchObservers.set(element,mutObs);
+		this.cacheWatchObservers.set(element,mutObs);
 		mutObs.observe(element,{ subtree:true, childList:true, attributes:false });
 	}
 	setReadyOnDomLoaded(){
@@ -166,35 +192,35 @@ class scopeDom {
 		document.addEventListener("readystatechange",listener,{ capture:true, passive:true, once:false });
 	}
 	setReadyOnRaf(){
-		if(!this._onReadyListeners) return;
+		if(!this.onReadyListeners) return;
 		animFrameHelper.onceRAF(this,'readyOnRaf',this.triggerOnReady.bind(this));
 	}
 	
-	isReady(){ return !this._onReadyListeners; }
-	isDOMReady(){ return !this._onDOMReadyListeners; }
+	isReady(){ return !this.onReadyListeners; }
+	isDOMReady(){ return !this.onDOMReadyListeners; }
 	triggerOnReady(domComplete=false){
-		this._checkPendingConnectElements();
-		if(this._onReadyListeners){
-			let list = this._onReadyListeners.values();
-			this._onReadyListeners = null;
-			this._duringOnReady = true;
+		this.checkPendingConnectElements();
+		if(this.onReadyListeners){
+			let list = this.onReadyListeners.values();
+			this.onReadyListeners = null;
+			this.isDuringOnReady = true;
 			for(const cb of list) try{ cb(); }catch(err){ console.error(err); }
-			this.controller.$emit("$update");
-			deferFn(()=>{ this._duringOnReady=false; });
+			this.scopeCtrl.$emit("$update");
+			deferFn(()=>{ this.isDuringOnReady=false; });
 		}
-		if(this._onDOMReadyListeners && domComplete){
-			let list = this._onDOMReadyListeners.values();
-			this._onDOMReadyListeners = null;
+		if(this.onDOMReadyListeners && domComplete){
+			let list = this.onDOMReadyListeners.values();
+			this.onDOMReadyListeners = null;
 			for(const cb of list) try{ cb(); }catch(err){ console.error(err); }
 		}
 	}
 	onReady(cb,delay=true){
-		if(this._onReadyListeners) this._onReadyListeners.add(cb);
+		if(this.onReadyListeners) this.onReadyListeners.add(cb);
 		else if(delay) deferFn(cb);
 		else cb();
 	}
 	onDOMReady(cb,delay=true){
-		if(this._onDOMReadyListeners) this._onDOMReadyListeners.add(cb);
+		if(this.onDOMReadyListeners) this.onDOMReadyListeners.add(cb);
 		else if(delay) deferFn(cb);
 		else cb();
 	}
@@ -202,15 +228,15 @@ class scopeDom {
 	onElementLoaded(element,cb){
 		if(isElementLoaded(element)) try{ cb(); }catch(err){ console.error(err); }
 		else {
-			if(!this._pendingOnElementLoaded.has(element)) this._pendingOnElementLoaded.set(element,new Set());
-			this._pendingOnElementLoaded.get(element).add(cb);
+			if(!this.pendingOnElementLoaded.has(element)) this.pendingOnElementLoaded.set(element,new Set());
+			this.pendingOnElementLoaded.get(element).add(cb);
 		}
 	}
 	elementIgnored(element,checkParents=false){
 		for(let e=element; e; e=checkParents?e.parentNode:null){
-			if(this._ignoreNodes.has(e)) return true;
-			if(e.nodeType===elementNodeType && e.hasAttribute(this._options.attribIgnore)){
-				this._ignoreNodes.add(e);
+			if(this.ignoreNodes.has(e)) return true;
+			if(e.nodeType===elementNodeType && e.hasAttribute(this.options.attribIgnore)){
+				this.ignoreNodes.add(e);
 				return true;
 			}
 		}
@@ -218,58 +244,53 @@ class scopeDom {
 	}
 	
 	// Element Connection
-	_connectElementAndChildren(element,act=true,list=new Set(),checkIgnoreParents=false){ // Connect parent before children
+	connectElementAndChildren(element,act=true,list=new Set(),checkIgnoreParents=false){ // Connect parent before children
 		if(element.nodeType===commentNodeType){ this.connectElement(element); return; }
 		if(element.nodeType!==elementNodeType || element.nodeName==='SCRIPT' || element.nodeName==='STYLE') return;
 		if(this.elementIgnored(element,checkIgnoreParents)) return;
 		list.add(element);
-		if(element.childNodes && element.nodeName!=='TEMPLATE' && element.nodeName!=='svg' && !element.shadowRoot) for(let e of [...element.childNodes]) this._connectElementAndChildren(e,false,list);
+		if(element.childNodes && element.nodeName!=='TEMPLATE' && element.nodeName!=='svg' && !element.shadowRoot) for(let e of [...element.childNodes]) this.connectElementAndChildren(e,false,list);
 		if(act) for(let e of list.values()) if(e.isConnected) this.connectElement(e);
 	}
-	_disconnectElementAndChildren(element,act=true,list=new Set()){ // Disconnect children before parent
+	disconnectElementAndChildren(element,act=true,list=new Set()){ // Disconnect children before parent
 		if(this.elementIgnored(element,true)) return;
-		if(element.childNodes) for(let e of [...element.childNodes]) this._disconnectElementAndChildren(e,false,list);
+		if(element.childNodes) for(let e of [...element.childNodes]) this.disconnectElementAndChildren(e,false,list);
 		list.add(element);
 		if(act) for(let e of list.values()) if(!e.isConnected) this.disconnectElement(e);
 	}
 	connectElement(element){
-		if(this._pendingConnectNodes.has(element) && !isElementLoaded(element,true)) return;
-		if(element!==this.mainElement && !isElementLoaded(element,true)){ this._pendingConnectNodes.add(element); return; }
-		if(this._cacheConnectedNodes.has(element)) return;
-		this._cacheConnectedNodes.add(element);
-		this._pendingConnectNodes.delete(element);
-		this._triggerElementConnect(element);
+		if(this.pendingConnectNodes.has(element) && !isElementLoaded(element,true)) return;
+		if(element!==this.mainElement && !isElementLoaded(element,true)){ this.pendingConnectNodes.add(element); return; }
+		if(this.cacheConnectedNodes.has(element)) return;
+		this.cacheConnectedNodes.add(element);
+		this.pendingConnectNodes.delete(element);
+		this.triggerElementConnect(element);
 	}
 	disconnectElement(element){
-		if(!this._cacheConnectedNodes.has(element)){ this._cleanupDisconnected(element); return; }
-		this._triggerElementDisconnect(element);
-		this._cleanupDisconnected(element,true);
+		if(!this.cacheConnectedNodes.has(element)){ this.cleanupDisconnected(element); return; }
+		this.triggerElementDisconnect(element);
+		this.cleanupDisconnected(element,true);
 	}
-	_checkPendingConnectElements(){
-		for(let e of this._pendingConnectNodes) if(isElementLoaded(e,true)) this._connectElementAndChildren(e);
-		for(let [e,cbList] of this._pendingOnElementLoaded) if(isElementLoaded(e)){
+	checkPendingConnectElements(){
+		for(let e of this.pendingConnectNodes) if(isElementLoaded(e,true)) this.connectElementAndChildren(e);
+		for(let [e,cbList] of this.pendingOnElementLoaded) if(isElementLoaded(e)){
 			for(let cb of cbList) try{ cbList.delete(cb); cb(); }catch(err){ console.error(err); }
-			this._pendingOnElementLoaded.delete(e);
+			this.pendingOnElementLoaded.delete(e);
 		}
 	}
 	
 	// Attrib Handling
-	__regexMatchAllFirstGroup(str,regex){
-		let match, matches=[]; regex.lastIndex=0;
-		while(match=regex.exec(str)) matches.push(match[1]);
-		return matches;
-	}
-	_elementAttribs(element,useCache=true,checkConnected=true){
-		if(checkConnected && (!this._cacheConnectedNodes.has(element) || !element.isConnected)) return null;
-		if(useCache && this._cacheElementAttribs.has(element)) return this._cacheElementAttribs.get(element);
+	elementAttribs(element,useCache=true,checkConnected=true){
+		if(checkConnected && (!this.cacheConnectedNodes.has(element) || !element.isConnected)) return null;
+		if(useCache && this.cacheElementAttribs.has(element)) return this.cacheElementAttribs.get(element);
 		let rawAttribs = element.attributes;
 		if(!rawAttribs) return null;
-		let attribs = new Map(), rawAliases = this._options.attributeAliases||null, nkAliases = this._options.attributeAliasNameKeys||null;
+		let attribs = new Map(), rawAliases = this.options.attributeAliases||null, nkAliases = this.options.attributeAliasNameKeys||null;
 		for(let { name:aName, value } of rawAttribs){
 			if(rawAliases && hasOwn(rawAliases,aName)) aName = rawAliases[aName];
-			let [ _, nameFull, optionFull ] = regexExec(aName,this._options.attribRegexMatch) || [];
+			let [ _, nameFull, optionFull ] = regexExec(aName,this.options.attribRegexMatch) || [];
 			if(nameFull===void 0 || nameFull.length===0) continue;
-			let nameParts = this.__regexMatchAllFirstGroup(nameFull,this._options.attribRegexParts);
+			let nameParts = regexMatchAllFirstGroup(nameFull,this.options.attribRegexParts);
 			if(nameParts.length<=0) continue;
 			if(value?.length===0) value = null;
 			let isDefault = nameParts[0]==='default';
@@ -278,21 +299,21 @@ class scopeDom {
 			let attrib = attribs.get(nameKey);
 			if(!attrib) attribs.set(nameKey,attrib={ __proto__:null, isDefault, attribute:aName, nameKey, nameParts, value:null, options:new Map() });
 			if(optionFull!==void 0 && optionFull.length>0){
-				let optionParts = this.__regexMatchAllFirstGroup(optionFull,this._options.attribRegexParts);
+				let optionParts = regexMatchAllFirstGroup(optionFull,this.options.attribRegexParts);
 				let optionKey = optionParts.join(' ');
 				attrib.options.set(optionKey,{ __proto__:null, isDefault, attribute:aName, nameKey:optionKey, optionParts, value });
 			}
 			else attrib.value = value;
 		}
-		if(useCache && attribs.size>0) this._cacheElementAttribs.set(element,attribs);
+		if(useCache && attribs.size>0) this.cacheElementAttribs.set(element,attribs);
 		return attribs;
 	}
-	_elementFindDefaults(element,useCache=true,checkConnected=true){
-		if(checkConnected && (!this._cacheConnectedNodes.has(element) || !element.isConnected)) return null;
-		if(useCache && this._cacheElementAttribsDefaults.has(element)) return this._cacheElementAttribsDefaults.get(element);
-		let defaults = new Map(), nkAliases = this._options.attributeAliasNameKeys||null;
+	elementFindDefaults(element,useCache=true,checkConnected=true){
+		if(checkConnected && (!this.cacheConnectedNodes.has(element) || !element.isConnected)) return null;
+		if(useCache && this.cacheElementAttribsDefaults.has(element)) return this.cacheElementAttribsDefaults.get(element);
+		let defaults = new Map(), nkAliases = this.options.attributeAliasNameKeys||null;
 		for(let e=element; e; e=e.parentNode){
-			let attribs = this._elementAttribs(e,useCache,checkConnected);
+			let attribs = this.elementAttribs(e,useCache,checkConnected);
 			if(!attribs || attribs.size===0) continue;
 			for(let [attribName,attrib] of attribs){
 				let { nameParts, attribute, options } = attrib;
@@ -307,18 +328,18 @@ class scopeDom {
 				}
 			}
 		}
-		if(useCache && defaults.size>0) this._cacheElementAttribsDefaults.set(element,defaults);
+		if(useCache && defaults.size>0) this.cacheElementAttribsDefaults.set(element,defaults);
 		return defaults;
 	}
-	_elementAttribOptionsWithDefaults(element,attrib,useCache=true,checkConnected=true){
+	elementAttribOptionsWithDefaults(element,attrib,useCache=true,checkConnected=true){
 		let { nameKey, nameParts, options } = attrib;
 		if(nameParts[0]!=='default'){
-			let defaultOptions = this._elementFindDefaults(element,useCache,checkConnected);
+			let defaultOptions = this.elementFindDefaults(element,useCache,checkConnected);
 			if(defaultOptions?.get(nameKey)?.options?.size>0) return new Map([...defaultOptions.get(nameKey).options,...options]);
 		}
 		return options;
 	}
-	_elementAttribFallbackOptionValue(attrib,whitelist=null,updateOption=true,updateAttrib=true){
+	elementAttribFallbackOptionValue(attrib,whitelist=null,updateOption=true,updateAttrib=true){
 		let { options, attribute, value } = attrib;
 		if(whitelist instanceof Array) whitelist = new Set(whitelist);
 		for(let [optionKey,opt] of options){
@@ -336,86 +357,86 @@ class scopeDom {
 		}
 		return value;
 	}
-	_elementAttribParseOption(element,attribOpts,optName,parseOptions={}){
+	elementAttribParseOption(element,attribOpts,optName,parseOptions={}){
 		parseOptions = { __proto__:null, default:null, emptyTrue:false, runExp:false, ...parseOptions };
 		let optValue = parseOptions.default, opt = attribOpts.get(optName), isDefault = opt?.isDefault;
 		if(parseOptions.emptyTrue && (opt?.value==='' || opt?.value===null)) optValue = true;
 		else if(!parseOptions.runExp && opt?.value?.length>0) optValue = opt.value;
 		else if(parseOptions.runExp && opt?.value?.length>0){
-			let { result } = this._elementExecExp(this._elementScopeCtrl(element),opt.value,{ $attribute:opt.attribute },{ silentHas:true, useReturn:true });
+			let { result } = this.elementExecExp(this.elementScopeCtrl(element),opt.value,{ $attribute:opt.attribute },{ silentHas:true, useReturn:true });
 			if(typeof result!==void 0) optValue = result;
 		}
 		return { value:optValue, raw:opt?.value, attribOption:opt, isDefault };
 	}
 	
 	// New Scope Controller
-	_elementNewScopeCtrl(element,newScope=void 0,parentScopeCtrl=this.controller,insertCache=true){
+	elementNewScopeCtrl(element,newScope=void 0,parentScopeCtrl=this.scopeCtrl,insertCache=true){
 		if(parentScopeCtrl instanceof scopeElementController) parentScopeCtrl = parentScopeCtrl.ctrl;
 		let scopeCtrl = new scopeController(newScope,parentScopeCtrl.eventTarget,parentScopeCtrl,false,this);
 		let elementScopeCtrl = new scopeElementController(element,null,scopeCtrl);
-		if(insertCache) this._cacheElementScopeCtrls.set(element,elementScopeCtrl);
+		if(insertCache) this.cacheElementScopeCtrls.set(element,elementScopeCtrl);
 		return elementScopeCtrl;
 	}
-	_elementNewIsolatedScopeCtrl(element,newScope=void 0,parentScopeCtrl=this.controller,insertCache=true){
+	elementNewIsolatedScopeCtrl(element,newScope=void 0,parentScopeCtrl=this.scopeCtrl,insertCache=true){
 		if(parentScopeCtrl instanceof scopeElementController) parentScopeCtrl = parentScopeCtrl.ctrl;
 		let scopeCtrl = new scopeController(newScope,null,parentScopeCtrl,true,this);
 		let elementScopeCtrl = new scopeElementController(element,null,scopeCtrl);
-		if(insertCache) this._cacheElementScopeCtrls.set(element,elementScopeCtrl);
+		if(insertCache) this.cacheElementScopeCtrls.set(element,elementScopeCtrl);
 		return elementScopeCtrl;
 	}
-	_elementScopeSetAlias(toElement,fromElement){
+	elementScopeSetAlias(toElement,fromElement){
 		// Element Scopes
-		let toScopeList = this._elementExtraScopes.get(toElement);
-		if(!toScopeList) this._elementExtraScopes.set(toElement,[fromElement]);
+		let toScopeList = this.elementExtraScopes.get(toElement);
+		if(!toScopeList) this.elementExtraScopes.set(toElement,[fromElement]);
 		else if(toScopeList.indexOf(fromElement)===-1) toScopeList.push(fromElement);
 		// Isolated Scopess
-		let fromIsolated = this._elementIsolatedScopes.has(fromElement);
-		let toIsolated = this._elementIsolatedScopes.has(toElement);
-		if(fromIsolated && !toIsolated) this._elementIsolatedScopes.add(toElement);
+		let fromIsolated = this.elementIsolatedScopes.has(fromElement);
+		let toIsolated = this.elementIsolatedScopes.has(toElement);
+		if(fromIsolated && !toIsolated) this.elementIsolatedScopes.add(toElement);
 		// Scope Controller
-		let fromScopeCtrl = this._cacheElementScopeCtrls.get(fromElement);
-		let toScopeCtrl = this._cacheElementScopeCtrls.has(toElement);
+		let fromScopeCtrl = this.cacheElementScopeCtrls.get(fromElement);
+		let toScopeCtrl = this.cacheElementScopeCtrls.has(toElement);
 		if(fromScopeCtrl && !toScopeCtrl){
 			let eCtrl = new scopeElementController(toElement,void 0,fromScopeCtrl);
-			this._cacheElementScopeCtrls.set(toElement,eCtrl);
+			this.cacheElementScopeCtrls.set(toElement,eCtrl);
 		}
 	}
 	
 	// Find Scope Controller
-	_elementScopeCtrl(element,useCache=true,findParent=true,newScope=null){
-		if(useCache && this._cacheElementScopeCtrls.has(element)) return this._cacheElementScopeCtrls.get(element);
-		let parentCtrl = findParent ? this._elementFindParentScopeCtrl(element) : null;
+	elementScopeCtrl(element,useCache=true,findParent=true,newScope=null){
+		if(useCache && this.cacheElementScopeCtrls.has(element)) return this.cacheElementScopeCtrls.get(element);
+		let parentCtrl = findParent ? this.elementFindParentScopeCtrl(element) : null;
 		if(parentCtrl && parentCtrl.element===element) return parentCtrl;
-		if(!parentCtrl && findParent) parentCtrl = this.controller;
+		if(!parentCtrl && findParent) parentCtrl = this.scopeCtrl;
 		let ctrl = new scopeElementController(element,newScope,parentCtrl);
-		if(useCache) this._cacheElementScopeCtrls.set(element,ctrl);
+		if(useCache) this.cacheElementScopeCtrls.set(element,ctrl);
 		return ctrl;
 	}
-	_elementFindParentScopeCtrl(element){
+	elementFindParentScopeCtrl(element){
 		for(let e=element; e; e=e.parentNode){
-			if(!this._cacheConnectedNodes.has(e) && element.nodeType!==textNodeType) return;
-			if(this._cacheElementScopeCtrls.has(e)) return this._cacheElementScopeCtrls.get(e);
+			if(!this.cacheConnectedNodes.has(e) && element.nodeType!==textNodeType) return;
+			if(this.cacheElementScopeCtrls.has(e)) return this.cacheElementScopeCtrls.get(e);
 		}
 	}
 	
 	// Execute Expression on Element
-	_elementExecExp(elementScopeCtrl,expression,extra=null,options={}){
-		let extraScopes = extra?[extra]:[], elementScopes = this._getElementScopes(elementScopeCtrl.element);
-		let { globalContext, documentContext, signalProxyAll } = this._options;
+	elementExecExp(elementScopeCtrl,expression,extra=null,options={}){
+		let extraScopes = extra?[extra]:[], elementScopes = this.getElementScopes(elementScopeCtrl.element);
+		let { globalContext, documentContext, signalProxyAll } = this.options;
 		options = { __proto__:null, globalsHide:!globalContext, hideDocument:!documentContext, useSignalProxy:!!signalProxyAll, ...options };
 		return elementScopeCtrl.execElementExpression(expression,extraScopes,elementScopes,options);
 	}
 	// Get Element Scopes [[element,scopesArr],...]
-	_getElementScopes(element,eScopes=[]){
+	getElementScopes(element,eScopes=[]){
 		for(let e=element; e; e=e.parentNode){
-			let isolated = this._elementIsolatedScopes.has(e) ? e : null;
-			if(this._elementExtraScopes.has(e)) eScopes.push([e,this._resolveElementScopes(e,isolated)]);
+			let isolated = this.elementIsolatedScopes.has(e) ? e : null;
+			if(this.elementExtraScopes.has(e)) eScopes.push([e,this.resolveElementScopes(e,isolated)]);
 			if(isolated) break;
 		}
 		return eScopes;
 	}
-	_resolveElementScopes(key,isolated=null,uniqueKeys=new Set([key]),list=[]){
-		let arr = this._elementExtraScopes.get(key), isolatedParent = isolated?.parentNode;
+	resolveElementScopes(key,isolated=null,uniqueKeys=new Set([key]),list=[]){
+		let arr = this.elementExtraScopes.get(key), isolatedParent = isolated?.parentNode;
 		for(let i=0,l=arr.length; i<l; i++){
 			let item = arr[i];
 			if(item instanceof nodeProto.constructor){ // Flatten
@@ -425,9 +446,9 @@ class scopeDom {
 					if(!isChildOrSibling) continue;
 				}
 				if(uniqueKeys.has(item)) continue; // Prevent endless recursion
-				if(!this._elementExtraScopes.has(item)) continue; // Ignore other nodes/elements in scope list
+				if(!this.elementExtraScopes.has(item)) continue; // Ignore other nodes/elements in scope list
 				uniqueKeys.add(item);
-				list = list.concat(this._resolveElementScopes(item,isolated,uniqueKeys));
+				list = list.concat(this.resolveElementScopes(item,isolated,uniqueKeys));
 			}
 			else list.push(item);
 		}
@@ -435,13 +456,13 @@ class scopeDom {
 	}
 	
 	// Handle connect & disconnect
-	_registerElementRelatedEvent(element,removeListener){
-		let map = this._elementRelatedEventListeners;
+	registerElementRelatedEvent(element,removeListener){
+		let map = this.elementRelatedEventListeners;
 		if(!map.has(element)) map.set(element,new Set());
 		map.get(element).add(removeListener);
 	}
-	_removeElementRelatedEvents(element){
-		let map = this._elementRelatedEventListeners;
+	removeElementRelatedEvents(element){
+		let map = this.elementRelatedEventListeners;
 		if(map.has(element)){
 			let set = map.get(element);
 			for(let removeListener of set) removeListener();
@@ -449,10 +470,10 @@ class scopeDom {
 		}
 	}
 	
-	_triggerElementConnect(element){
-		let attribs = this._elementAttribs(element), elementScopeCtrl, queue=[];
+	triggerElementConnect(element){
+		let attribs = this.elementAttribs(element), elementScopeCtrl, queue=[];
 		if(attribs && attribs.size>0){
-			elementScopeCtrl = this._elementScopeCtrl(element);
+			elementScopeCtrl = this.elementScopeCtrl(element);
 			// Swap
 			if(element.nodeName==='TEMPLATE' && attribs.has('swap')){
 				let anchor = document.createComment(' Template-Swap-Anchor: '+element.cloneNode(false).outerHTML+' ');
@@ -474,14 +495,14 @@ class scopeDom {
 			if(scopeAttrib || scopeNamedAttrib){
 				if(scopeAttrib && scopeNamedAttrib && scopeNamedAttrib.options.size>0) scopeAttrib.options = new Map([...scopeAttrib.options,...scopeNamedAttrib.options]);
 				if(!scopeAttrib) scopeAttrib = scopeNamedAttrib;
-				let options = this._elementAttribOptionsWithDefaults(element,scopeAttrib);
-				if(scopeAttrib.value===null) this._elementAttribFallbackOptionValue(scopeAttrib,['isolate']);
+				let options = this.elementAttribOptionsWithDefaults(element,scopeAttrib);
+				if(scopeAttrib.value===null) this.elementAttribFallbackOptionValue(scopeAttrib,['isolate']);
 				let isolated = options.get('isolate'), { value, attribute:$attribute } = scopeAttrib; // After fallback
 				let exp = value, extra = { __proto__:null, $attribute }, expOpts = { __proto__:null, run:true, useReturn:true };
 				// Prepare Named Scope
 				if(scopeNamedAttrib){
 					if(scopeNamedAttrib.value?.length>0) value = scopeNamedAttrib.value;
-					let name = value, ctrl = this.namedScopeControllers.get(name);
+					let name = value, ctrl = this.namedControllers.get(name);
 					if(!ctrl){ console.warn(`scopeDom: scopeController "${name}" doesn't exist`); return; }
 					if(ctrl.element && ctrl.element!==element){ console.warn(`scopeDom: scopeController "${name}" is already in use`,{ ctrlElement:ctrl.element, newElement:element }); return; }
 					ctrl.element = element;
@@ -491,34 +512,34 @@ class scopeDom {
 				// New Scope
 				if(exp!==null){
 					// Run new scope expression normally, with parent scope
-					let { result } = this._elementExecExp(elementScopeCtrl,exp,extra,expOpts);
+					let { result } = this.elementExecExp(elementScopeCtrl,exp,extra,expOpts);
 					result = result ? Object(result) : void 0;
 					let originalScopeCtrl = elementScopeCtrl; // Use originalScopeCtrl as $scopeParent
-					if(isolated) this._elementIsolatedScopes.add(element);
-					if(isolated) elementScopeCtrl = this._elementNewIsolatedScopeCtrl(element,result||void 0,originalScopeCtrl,true);
-					else elementScopeCtrl = this._elementNewScopeCtrl(element,result||void 0,originalScopeCtrl,true);
+					if(isolated) this.elementIsolatedScopes.add(element);
+					if(isolated) elementScopeCtrl = this.elementNewIsolatedScopeCtrl(element,result||void 0,originalScopeCtrl,true);
+					else elementScopeCtrl = this.elementNewScopeCtrl(element,result||void 0,originalScopeCtrl,true);
 				}
 				// Run Named Scope Controller
 				if(scopeNamedAttrib){
 					expOpts = { __proto__:null, ...expOpts, fnThis:null, useReturn:false }; // fnThis:null sets 'this' as proxy
 					exp = `((fn)=>{ this._ctrlFn=void 0; instance.handleScopeCtrlFn(this,fn); })(_ctrlFn);`;
-					this._elementExecExp(elementScopeCtrl,exp,{ __proto__:null, instance:this },expOpts);
+					this.elementExecExp(elementScopeCtrl,exp,{ __proto__:null, instance:this },expOpts);
 				}
 			}
 			// Other built-in attribs
 			for(let [attribName,attrib] of attribs){
 				let { nameParts, value } = attrib;
 				if(nameParts[0]==='default') continue;
-				let options = this._elementAttribOptionsWithDefaults(element,attrib);
+				let options = this.elementAttribOptionsWithDefaults(element,attrib);
 				// Init / Connect
 				if(nameParts.length===1){
 					let [ name ] = nameParts;
 					if(name==='init' || name==='connect'){
-						if(value===null) value = this._elementAttribFallbackOptionValue(attrib,['raf','instant']);
+						if(value===null) value = this.elementAttribFallbackOptionValue(attrib,['raf','instant']);
 						let { attribute:$attribute } = attrib;
 						let raf = options.get('raf'), instant = options.get('instant');
 						if(value?.length>0){
-							let { runFn:connectCB } = this._elementExecExp(elementScopeCtrl,value,{ __proto__:null, $attribute },{ __proto__:null, run:false });
+							let { runFn:connectCB } = this.elementExecExp(elementScopeCtrl,value,{ __proto__:null, $attribute },{ __proto__:null, run:false });
 							queue.push(function attribConnect(){
 								if(raf && !animFrameHelper.isDuringRAF) animFrameHelper.onceRAF(element,$attribute,connectCB);
 								else if(instant) connectCB();
@@ -532,17 +553,17 @@ class scopeDom {
 				if(nameParts.length===1 || nameParts.length===2){
 					let [ type, name ] = nameParts, suffix = null;
 					if(type==='update' && value===null){
-						value = this._elementAttribFallbackOptionValue(attrib,['before','after']);
+						value = this.elementAttribFallbackOptionValue(attrib,['before','after']);
 						if(options.get('before')) suffix=':before';
 						if(options.get('after')) suffix=':after';
 					}
 					if(type==='update' && value?.length>0){
 						let { attribute:$attribute } = attrib;
-						let { runFn:updateCB } = this._elementExecExp(elementScopeCtrl,value,{ __proto__:null, $attribute },{ __proto__:null, run:false });
+						let { runFn:updateCB } = this.elementExecExp(elementScopeCtrl,value,{ __proto__:null, $attribute },{ __proto__:null, run:false });
 						// Register events straight away
 						let evt = '$update'+(name?.length>0?'-'+name:'')+(suffix!==null?suffix:'');
 						let removeListener = elementScopeCtrl.ctrl.$on(evt,()=>updateCB(),{},true);
-						this._registerElementRelatedEvent(element,removeListener);
+						this.registerElementRelatedEvent(element,removeListener);
 						continue;
 					}
 				}
@@ -564,15 +585,15 @@ class scopeDom {
 					else if(type==='on' && target==='document'){ evtBase = elementScopeCtrl.ctrl; evtMethod = '$onTarget'; evtTarget=document; }
 					else if(type==='once' && target==='document'){ evtBase = elementScopeCtrl.ctrl; evtMethod = '$onceTarget'; evtTarget=document; }
 					if(evtBase && evtMethod){
-						if(value===null) value = this._elementAttribFallbackOptionValue(attrib,['raf','instant','pd']);
+						if(value===null) value = this.elementAttribFallbackOptionValue(attrib,['raf','instant','pd']);
 						let { attribute:$attribute } = attrib;
 						let raf = options.get('raf'), instant = options.get('instant'), pd = options.get('pd');
 						if(value?.length>0){
-							let self=this, { runFn:eventCB, firstScope } = this._elementExecExp(elementScopeCtrl,value,{ __proto__:null, $attribute },{ __proto__:null, run:false });
+							let self=this, { runFn:eventCB, firstScope } = this.elementExecExp(elementScopeCtrl,value,{ __proto__:null, $attribute },{ __proto__:null, run:false });
 							function eventListener(event){
 								if(pd) event.preventDefault();
 								firstScope.$event = event;
-								if(animFrameHelper.isDuringRAF || self._duringOnReady) eventCB();
+								if(animFrameHelper.isDuringRAF || self.isDuringOnReady) eventCB();
 								else if(raf) animFrameHelper.onceRAF(element,$attribute,eventCB);
 								else if(instant) eventCB();
 								else deferFn(eventCB);
@@ -580,7 +601,7 @@ class scopeDom {
 							};
 							// Register events straight away
 							let removeListener = evtTarget ? evtBase[evtMethod](evtTarget,eventName,eventListener,{},true) : evtBase[evtMethod](eventName,eventListener,{},true);
-							this._registerElementRelatedEvent(element,removeListener);
+							this.registerElementRelatedEvent(element,removeListener);
 							continue;
 						}
 					}
@@ -589,26 +610,26 @@ class scopeDom {
 		}
 		if(queue.length>0) this.onReady(function onReadyConnect(){ for(let cb of queue) cb.apply(this); }.bind(this),false);
 		// Run plugins onConnect
-		this._pluginsOnConnect(new pluginOnElementPlug(this,element,elementScopeCtrl,attribs));
+		this.pluginsOnConnect(new pluginOnElementPlug(this,element,elementScopeCtrl,attribs));
 	}
 	
-	_triggerElementDisconnect(element){
-		if(!this._cacheConnectedNodes.has(element)) return;
-		let attribs = this._elementAttribs(element,true,false), elementScopeCtrl;
+	triggerElementDisconnect(element){
+		if(!this.cacheConnectedNodes.has(element)) return;
+		let attribs = this.elementAttribs(element,true,false), elementScopeCtrl;
 		if(attribs && attribs.size>0){
-			elementScopeCtrl = this._elementScopeCtrl(element);
+			elementScopeCtrl = this.elementScopeCtrl(element);
 			for(let [attribName,attrib] of attribs){
 				let { nameParts, value, attribute:$attribute } = attrib;
 				if(nameParts[0]==='default') continue;
-				let options = this._elementAttribOptionsWithDefaults(element,attrib);
+				let options = this.elementAttribOptionsWithDefaults(element,attrib);
 				if(nameParts.length===1){
 					let [ name ] = nameParts;
 					if(name==='deinit' || name==='disconnect'){
-						if(value===null) value = this._elementAttribFallbackOptionValue(attrib,['raf','instant']);
+						if(value===null) value = this.elementAttribFallbackOptionValue(attrib,['raf','instant']);
 						let { attribute:$attribute } = attrib;
 						let raf = options.get('raf'), instant = options.get('instant');
 						if(value?.length>0){
-							let { runFn:disconnectCB } = this._elementExecExp(elementScopeCtrl,value,{ __proto__:null, $attribute },{ __proto__:null, run:false });
+							let { runFn:disconnectCB } = this.elementExecExp(elementScopeCtrl,value,{ __proto__:null, $attribute },{ __proto__:null, run:false });
 							if(raf && !animFrameHelper.isDuringRAF) animFrameHelper.requestAF(disconnectCB);
 							else if(instant || animFrameHelper.isDuringRAF) disconnectCB();
 							else deferFn(disconnectCB);
@@ -619,31 +640,26 @@ class scopeDom {
 			}
 		}
 		// Run plugins onDisconnect
-		this._pluginsOnDisconnect(new pluginOnElementPlug(this,element,elementScopeCtrl,attribs));
+		this.pluginsOnDisconnect(new pluginOnElementPlug(this,element,elementScopeCtrl,attribs));
 	}
-	_cleanupDisconnected(element,completely=false){
-		if(this._cacheElementAttribs.has(element)) this._cacheElementAttribs.delete(element);
-		if(this._cacheElementAttribsDefaults.has(element)) this._cacheElementAttribsDefaults.delete(element);
-		if(this._cacheElementScopeCtrls.has(element)) this._cacheElementScopeCtrls.delete(element);
-		if(this._elementExtraScopes.has(element)) this._elementExtraScopes.delete(element);
-		if(this._elementIsolatedScopes.has(element)) this._elementIsolatedScopes.delete(element);
-		this._removeElementRelatedEvents(element);
-		this.controller.eventRegistry.remove(element);
+	cleanupDisconnected(element,completely=false){
+		if(this.cacheElementAttribs.has(element)) this.cacheElementAttribs.delete(element);
+		if(this.cacheElementAttribsDefaults.has(element)) this.cacheElementAttribsDefaults.delete(element);
+		if(this.cacheElementScopeCtrls.has(element)) this.cacheElementScopeCtrls.delete(element);
+		if(this.elementExtraScopes.has(element)) this.elementExtraScopes.delete(element);
+		if(this.elementIsolatedScopes.has(element)) this.elementIsolatedScopes.delete(element);
+		this.removeElementRelatedEvents(element);
+		this.scopeCtrl.eventRegistry.remove(element);
 		if(completely){
-			this._cacheConnectedNodes.delete(element);
-			this._pendingConnectNodes.delete(element);
+			this.cacheConnectedNodes.delete(element);
+			this.pendingConnectNodes.delete(element);
 		}
 	}
 	
 	// Plugins & Middleware
-	static pluginAdd(plugin){
-		if(mainInstance) return mainInstance.pluginAdd(plugin);
-		let listPlugins = window.scopeDomPlugins||(window.scopeDomPlugins=[]);
-		if(listPlugins.indexOf(plugin)===-1) listPlugins.push(plugin);
-		return true;
-	}
 	pluginAdd(plugin){
-		let plugins=this._plugins, register=plugins.register;
+		if(!this.options.allowLatePlugins) throw console.log(this.options), new Error("scopeDom: late plugin adding is disabled, due to instance { allowLatePlugins:false }");
+		let plugins=this.plugins, register=plugins.register;
 		if(register.has(plugin)) return true;
 		register.add(plugin);
 		if(typeof plugin==='function'){ plugin=new plugin(scopeDom,this); register.add(plugin); }
@@ -652,36 +668,37 @@ class scopeDom {
 		if(plugin.onDisconnect) plugins.onDisconnect.add(plugin.onDisconnect.bind(plugin));
 		if(plugin.onPluginAdd) plugins.onPluginAdd.add(plugin.onPluginAdd.bind(plugin));
 		// Late Connect
-		if(plugins.init && plugin.onConnect) this._latePluginAdd_runConnect(plugin,this.mainElement,true);
+		if(plugins.init && plugin.onConnect) this.latePluginAdd_runConnect(plugin,this.mainElement,true);
 		// onPluginAdd Method
-		this._pluginsOnPluginAdd(plugin);
+		this.pluginsOnPluginAdd(plugin);
 		return true;
 	}
-	_initPlugins(){
-		if(this._plugins.init) return;
-		for(let plugin of window.scopeDomPlugins||[]) this.pluginAdd(plugin);
-		this._plugins.init=true; window.scopeDomPlugins=null;
+	initPlugins(){
+		if(this.plugins.init) return;
+		if(!this.options.allowLatePlugins) throw console.log(this.options), new Error("scopeDom: late plugin adding is disabled, due to instance { allowLatePlugins:false }");
+		for(let plugin of pluginsPostMain||Object.values(window.scopeDomPlugins)||[]) this.pluginAdd(plugin);
+		this.plugins.init=true;
 	}
-	_pluginsOnConnect(plugObj){
-		for(let pluginOnConnect of this._plugins.onConnect) try{ pluginOnConnect(plugObj); }catch(err){ console.error(err); }
+	pluginsOnConnect(plugObj){
+		for(let pluginOnConnect of this.plugins.onConnect) try{ pluginOnConnect(plugObj); }catch(err){ console.error(err); }
 	}
-	_pluginsOnDisconnect(plugObj){
-		for(let pluginOnDisconnect of this._plugins.onDisconnect) try{ pluginOnDisconnect(plugObj); }catch(err){ console.error(err); }
+	pluginsOnDisconnect(plugObj){
+		for(let pluginOnDisconnect of this.plugins.onDisconnect) try{ pluginOnDisconnect(plugObj); }catch(err){ console.error(err); }
 	}
-	_pluginsOnPluginAdd(plugin){
-		for(let pluginOnPluginAdd of this._plugins.onPluginAdd) try{ pluginOnPluginAdd(plugin); }catch(err){ console.error(err); }
+	pluginsOnPluginAdd(plugin){
+		for(let pluginOnPluginAdd of this.plugins.onPluginAdd) try{ pluginOnPluginAdd(plugin); }catch(err){ console.error(err); }
 	}
-	_latePluginAdd_runConnect(plugin,element,act=true,list=new Set()){
-		if(!plugin || !this._plugins.init || !this._cacheConnectedNodes.has(element)) return;
+	latePluginAdd_runConnect(plugin,element,act=true,list=new Set()){
+		if(!plugin || !this.plugins.init || !this.cacheConnectedNodes.has(element)) return;
 		list.add(element);
-		if(element.childNodes) for(let e of [...element.childNodes]) this._latePluginAdd_runConnect(plugin,e,false,list);
+		if(element.childNodes) for(let e of [...element.childNodes]) this.latePluginAdd_runConnect(plugin,e,false,list);
 		if(act){
 			let onConnect = plugin.onConnect.bind(plugin);
 			for(let e of list){
 				if(!e.isConnected) continue;
-				let attribs = this._elementAttribs(e);
+				let attribs = this.elementAttribs(e);
 				if(!attribs || attribs.size===0) continue;
-				try{ onConnect(new pluginOnElementPlug(this,e,this._elementScopeCtrl(e),attribs)); }catch(err){ console.error(err); }
+				try{ onConnect(new pluginOnElementPlug(this,e,this.elementScopeCtrl(e),attribs)); }catch(err){ console.error(err); }
 			}
 		}
 	}
@@ -717,4 +734,7 @@ Object.assign(scopeDom,{
 	scopeElementController,
 	eventRegistry
 });
+Object.freeze(scopeDom);
+
 export default scopeDom;
+
