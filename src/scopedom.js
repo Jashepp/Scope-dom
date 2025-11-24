@@ -1,7 +1,7 @@
 
 import {
 	noopFn, noopAsyncFn, deferFn,
-	requestAF, onceRAF, promiseToRAF, regexMatchAll, regexExec, regexTest,
+	animFrameHelper, regexMatchAll, regexExec, regexTest,
 	elementNodeType, commentNodeType, textNodeType,
 	getPrototypeOf, getOwnPropertyDescriptor, defineProperty, hasOwn,
 	objectProto, nodeProto, elementProto, functionProto, functionAsyncProto, nativeProtos, nativeConstructors,
@@ -167,7 +167,7 @@ class scopeDom {
 	}
 	setReadyOnRaf(){
 		if(!this._onReadyListeners) return;
-		onceRAF(this,'readyOnRaf',this.triggerOnReady.bind(this));
+		animFrameHelper.onceRAF(this,'readyOnRaf',this.triggerOnReady.bind(this));
 	}
 	
 	isReady(){ return !this._onReadyListeners; }
@@ -520,7 +520,7 @@ class scopeDom {
 						if(value?.length>0){
 							let { runFn:connectCB } = this._elementExecExp(elementScopeCtrl,value,{ __proto__:null, $attribute },{ __proto__:null, run:false });
 							queue.push(function attribConnect(){
-								if(raf && !isDuringRAF) onceRAF(element,$attribute,connectCB);
+								if(raf && !animFrameHelper.isDuringRAF) animFrameHelper.onceRAF(element,$attribute,connectCB);
 								else if(instant) connectCB();
 								else deferFn(connectCB);
 							});
@@ -572,8 +572,8 @@ class scopeDom {
 							function eventListener(event){
 								if(pd) event.preventDefault();
 								firstScope.$event = event;
-								if(isDuringRAF || self._duringOnReady) eventCB();
-								else if(raf) onceRAF(element,$attribute,eventCB);
+								if(animFrameHelper.isDuringRAF || self._duringOnReady) eventCB();
+								else if(raf) animFrameHelper.onceRAF(element,$attribute,eventCB);
 								else if(instant) eventCB();
 								else deferFn(eventCB);
 								if(pd) return false;
@@ -609,8 +609,8 @@ class scopeDom {
 						let raf = options.get('raf'), instant = options.get('instant');
 						if(value?.length>0){
 							let { runFn:disconnectCB } = this._elementExecExp(elementScopeCtrl,value,{ __proto__:null, $attribute },{ __proto__:null, run:false });
-							if(raf && !isDuringRAF) requestAF(disconnectCB);
-							else if(instant || isDuringRAF) disconnectCB();
+							if(raf && !animFrameHelper.isDuringRAF) animFrameHelper.requestAF(disconnectCB);
+							else if(instant || animFrameHelper.isDuringRAF) disconnectCB();
 							else deferFn(disconnectCB);
 							continue;
 						}
@@ -698,7 +698,7 @@ class pluginOnElementPlug {
 }
 
 Object.assign(scopeDom,{
-	requestAF, onceRAF, promiseToRAF,
+	animFrameHelper,
 	regexMatchAll, regexExec, regexTest,
 	setAttribute,
 	isElementLoaded,

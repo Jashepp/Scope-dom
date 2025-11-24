@@ -7,7 +7,7 @@ export const { getPrototypeOf, getOwnPropertyDescriptor, defineProperty, hasOwn 
 
 // Call multiple callbacks on Animation Frame
 let rAFList=new Set(), onceRAFList=new Map(), isDuringRAF=false, isScheduled=false;
-function _scheduledRAF(){
+function scheduledRAF(){
 	isDuringRAF = true;
 	let list=[...rAFList.values()]; rAFList.clear();
 	for(let cb of list) try{ cb(); }catch(err){ console.error(err); }
@@ -15,24 +15,31 @@ function _scheduledRAF(){
 	for(let s of list2) for(let [k,cb] of s) try{ cb(); }catch(err){ console.error(err); }
 	isScheduled = false;
 	deferFn(()=>{ isDuringRAF=false; });
-};
-export function requestAF(cb){
-	rAFList.add(cb);
-	if(!isScheduled) isScheduled=requestAnimationFrame(_scheduledRAF),true;
-};
-// Call one callback on Animation Frame, unique by obj+key. First cb only, unless useLast to use last cb called with
-export function onceRAF(obj,key,cb,useLast=true){
-	if(obj===void 0 || obj===null) obj = onceRAF;
-	if(key===void 0 || key===null) key = 0;
-	let list = onceRAFList.get(obj);
-	if(!list) onceRAFList.set(obj,(list=new Map()));
-	let hasCB = list.has(key);
-	if(useLast && hasCB) list.set(key,cb);
-	else if(!hasCB) list.set(key,cb);
-	if(!isScheduled) isScheduled=requestAnimationFrame(_scheduledRAF),true;
-	return !hasCB; // True if fresh (first cb)
-};
-export function promiseToRAF(p,cb,cbErr){ return p.then((r)=>requestAF(()=>cb(r)),(err)=>requestAF(cbErr?cbErr:()=>console.error(err))); }
+}
+
+export class animFrameHelper {
+	static get isDuringRAF(){ return isDuringRAF; };
+	static get isScheduled(){ return isScheduled; };
+	static requestAF(cb){
+		rAFList.add(cb);
+		if(!isScheduled) isScheduled=requestAnimationFrame(scheduledRAF),true;
+	};
+	// Call one callback on Animation Frame, unique by obj+key. First cb only, unless useLast to use last cb called with
+	static onceRAF(obj,key,cb,useLast=true){
+		if(obj===void 0 || obj===null) obj = animFrameHelper.onceRAF;
+		if(key===void 0 || key===null) key = 0;
+		let list = onceRAFList.get(obj);
+		if(!list) onceRAFList.set(obj,(list=new Map()));
+		let hasCB = list.has(key);
+		if(useLast && hasCB) list.set(key,cb);
+		else if(!hasCB) list.set(key,cb);
+		if(!isScheduled) isScheduled=requestAnimationFrame(scheduledRAF),true;
+		return !hasCB; // True if fresh (first cb)
+	};
+	static promiseToRAF(p,cb,cbErr){
+		return p.then((r)=>animFrameHelper.requestAF(()=>cb(r)),(err)=>animFrameHelper.requestAF(cbErr?cbErr:()=>console.error(err)));
+	}
+}
 
 
 export function regexMatchAll(str,r){ return str.matchAll(r); } // matchAll clones regex, and doesn't need lastIndex=0

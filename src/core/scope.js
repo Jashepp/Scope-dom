@@ -1,7 +1,7 @@
 
 import {
 	noopFn, noopAsyncFn, deferFn,
-	requestAF, onceRAF, promiseToRAF, regexMatchAll, regexExec, regexTest,
+	animFrameHelper, regexMatchAll, regexExec, regexTest,
 	elementNodeType, commentNodeType, textNodeType,
 	getPrototypeOf, getOwnPropertyDescriptor, defineProperty, hasOwn,
 	objectProto, nodeProto, elementProto, functionProto, functionAsyncProto, nativeProtos, nativeConstructors,
@@ -54,9 +54,9 @@ export class scopeControllerContext {
 	$on(name,listener,options={},returnRemove=false){ return this[scSymb].$on(name,listener,options,returnRemove); };
 	$once(name,listener,options={},returnRemove=false){ return this[scSymb].$once(name,listener,options,returnRemove); };
 	$emit(name,detail=null,options=null){ return this[scSymb].$emit(name,detail,options); };
-	$emitRAF(name,detail=null,options=null,uniqueID=this.$attribute||'$emitRAF:scc'){ return onceRAF(this.$this||this[scSymb].scope,uniqueID+':'+name,()=>this[scSymb].$emit(name,detail,options)); };
-	$onRAF(cb){ return requestAF(cb); };
-	$onceRAF(cb,uniqueID=this.$attribute||'$onceRAF:scc'){ return onceRAF(this.$this||this[scSymb].scope,uniqueID,cb); };
+	$emitRAF(name,detail=null,options=null,uniqueID=this.$attribute||'$emitRAF:scc'){ return animFrameHelper.onceRAF(this.$this||this[scSymb].scope,uniqueID+':'+name,()=>this[scSymb].$emit(name,detail,options)); };
+	$onRAF(cb){ return animFrameHelper.requestAF(cb); };
+	$onceRAF(cb,uniqueID=this.$attribute||'$onceRAF:scc'){ return animFrameHelper.onceRAF(this.$this||this[scSymb].scope,uniqueID,cb); };
 	$offTarget(target,name=null,listener=null,options=null){ return this[scSymb].$offTarget(target,name,listener,options); };
 	$onTarget(target,name,listener,options={},returnRemove=false){ return this[scSymb].$onTarget(target,name,listener,options,returnRemove); };
 	$onceTarget(target,name,listener,options={},returnRemove=false){ return this[scSymb].$onceTarget(target,name,listener,options,returnRemove); };
@@ -89,8 +89,8 @@ export class scopeController {
 			this.$emit(evt+':before'); this.$emit(evt); this.$emit(evt+':after');
 			this.isDuringUpdate = false;
 		};
-		if(isDuringRAF || this.scopeDomInstance._duringOnReady || this.isDuringUpdate){ deferFn(emitUpdate); }
-		else onceRAF(this.scope,evt,emitUpdate,true);
+		if(animFrameHelper.isDuringRAF || this.scopeDomInstance._duringOnReady || this.isDuringUpdate){ deferFn(emitUpdate); }
+		else animFrameHelper.onceRAF(this.scope,evt,emitUpdate,true);
 	}
 	
 	$removeEvent(name=null,listener=null,options=null){
@@ -167,7 +167,7 @@ export class scopeElementContext {
 	$onDom(name,listener,options={},returnRemove=false){ return this[seSymb].$onDom(name,listener,options,returnRemove); };
 	$onceDom(name,listener,options={},returnRemove=false){ return this[seSymb].$onceDom(name,listener,options,returnRemove); };
 	$emitDom(name,detail=null,options=null){ return this[seSymb].$emitDom(name,detail,options); };
-	$emitDomRAF(name,detail=null,options=null,uniqueID=this.$attribute||'$emitDomRAF:sec'){ return onceRAF(this[seSymb].element,uniqueID+':'+name,()=>this[seSymb].$emitDom(name,detail,options)); };
+	$emitDomRAF(name,detail=null,options=null,uniqueID=this.$attribute||'$emitDomRAF:sec'){ return animFrameHelper.onceRAF(this[seSymb].element,uniqueID+':'+name,()=>this[seSymb].$emitDom(name,detail,options)); };
 }
 
 export class scopeElementController {
@@ -251,8 +251,8 @@ export class scopeElementController {
 			this.$emitDomChildren(evt+':before',u,u,emitSelf); this.$emitDomChildren(evt,u,u,emitSelf); this.$emitDomChildren(evt+':after',u,u,emitSelf);
 			this.isDuringUpdateDom = false;
 		};
-		if(isDuringRAF){ deferFn(emitUpdate); }
-		else onceRAF(this.element,evt,emitUpdate,true);
+		if(animFrameHelper.isDuringRAF){ deferFn(emitUpdate); }
+		else animFrameHelper.onceRAF(this.element,evt,emitUpdate,true);
 	}
 	
 	$emitDomChildren(name,detail=null,options=null,emitSelf=false){

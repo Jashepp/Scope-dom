@@ -280,7 +280,7 @@
 					signalObs = state.signalObs = (signalObs || state.signalCtrl.createObserver());
 					let self=this; signalObs.addListener(function pluginIf_signalObserver(){
 						let updateIndex = state.updateIndex;
-						self.scopeDom.onceRAF(element,signalObs,function pluginIf_signalObserver_RAF(){
+						self.scopeDom.animFrameHelper.onceRAF(element,signalObs,function pluginIf_signalObserver_RAF(){
 							if(state.updateIndex!==updateIndex) return;
 							self._runIfExpressions(plugInfo,attrib,state,exp,runMatch,true);
 						});
@@ -304,7 +304,7 @@
 				this._handleResult(plugInfo,attrib,state,exp,updateIndex,runMatch,false,defaultValue);
 				updateIndex = state.updateIndex;
 				// Handle Result
-				this.scopeDom.promiseToRAF(result,this._handleResult.bind(this,plugInfo,attrib,state,exp,updateIndex,false,true));
+				this.scopeDom.animFrameHelper.promiseToRAF(result,this._handleResult.bind(this,plugInfo,attrib,state,exp,updateIndex,false,true));
 				return;
 			}
 			// force updateOthers if match result is a promise
@@ -347,7 +347,7 @@
 					else if(execMatch.result instanceof Promise){
 						matchResult = defaultValue;
 						execMatch.result[matchCasePromiseWaitSymbol] = true;
-						this.scopeDom.promiseToRAF(execMatch.result,(pResult)=>{
+						this.scopeDom.animFrameHelper.promiseToRAF(execMatch.result,(pResult)=>{
 							execMatch.result[matchCasePromiseWaitSymbol] = false;
 							execMatch.result[matchCasePromiseResultSymbol] = pResult;
 							this._runIfExpressions(plugInfo,attrib,state,exp,false);

@@ -233,7 +233,7 @@
 					if(int.intersectionRatio>0){ if(!prevVisible){ state.isVisible=true; check=true; } }
 					else { if(prevVisible){ state.isVisible=false; } }
 				}
-				if(check) this.scopeDom.onceRAF(state.element,'pluginParse-onVisible',fn);
+				if(check) this.scopeDom.animFrameHelper.onceRAF(state.element,'pluginParse-onVisible',fn);
 			}.bind(this),{ __proto__:null, threshold:[0,0.05,0.5,0.95,1], rootMargin:"10px", });
 			intObs.observe(element);
 			this.intObsMap.set(element,intObs);
@@ -245,7 +245,7 @@
 			state.parsePending = false;
 			this._runParseExpressions(state);
 			// If document is still loading & there's an element mid-dom-construction
-			if(state.nodesPending) this.scopeDom.onceRAF(state.element,'pluginParse-nodesPending',this._scanParseRunSafe.bind(this,state));
+			if(state.nodesPending) this.scopeDom.animFrameHelper.onceRAF(state.element,'pluginParse-nodesPending',this._scanParseRunSafe.bind(this,state));
 			state.nodesPending = false;
 		}
 		
@@ -447,7 +447,7 @@
 						exec = obj.exec = this._execExpression(element,node,exp,signalObs);
 						signalObs.addListener(function parseTextNode_signalObserver(){
 							let updateIndex = obj.updateIndex;
-							self.scopeDom.onceRAF(node,signalObs,function parseTextNode_signalObserver_RAF(){
+							self.scopeDom.animFrameHelper.onceRAF(node,signalObs,function parseTextNode_signalObserver_RAF(){
 								if(obj.updateIndex===updateIndex) self._updateTextNode(node,exec.runFn(),obj,state,updateIndex,signalObs);
 							});
 						});
@@ -468,7 +468,7 @@
 						exec = obj.exec = this._execExpression(element,node,exp,signalObs);
 						signalObs.addListener(function parseAttribs_signalObserver(){
 							let updateIndex = obj.updateIndex;
-							self.scopeDom.onceRAF(node,signalObs,function parseAttribs_signalObserver_RAF(){
+							self.scopeDom.animFrameHelper.onceRAF(node,signalObs,function parseAttribs_signalObserver_RAF(){
 								if(obj.updateIndex===updateIndex) self._updateAttribute(node,name,exec.runFn(),obj,state,updateIndex,signalObs);
 							});
 						});
@@ -486,7 +486,7 @@
 						exec = parseBindSafe.exec = this._execExpression(element,element,exp,signalObs);
 						signalObs.addListener(function parseBindSafe_signalObserver(){
 							let updateIndex = parseBindSafe.updateIndex;
-							self.scopeDom.onceRAF(element,signalObs,function parseBindSafe_signalObserver_RAF(){
+							self.scopeDom.animFrameHelper.onceRAF(element,signalObs,function parseBindSafe_signalObserver_RAF(){
 								if(parseBindSafe.updateIndex===updateIndex) self._updateBind(element,false,exec.runFn(),parseBindSafe,state,updateIndex,signalObs);
 							});
 						});
@@ -504,7 +504,7 @@
 						exec = parseBindHTML.exec = this._execExpression(element,element,exp,signalObs);
 						signalObs.addListener(function parseBindHTML_signalObserver(){
 							let updateIndex = parseBindHTML.updateIndex;
-							self.scopeDom.onceRAF(element,signalObs,function parseBindHTML_signalObserver_RAF(){
+							self.scopeDom.animFrameHelper.onceRAF(element,signalObs,function parseBindHTML_signalObserver_RAF(){
 								if(parseBindHTML.updateIndex===updateIndex) self._updateBind(element,true,exec.runFn(),parseBindHTML,state,updateIndex,signalObs);
 							});
 						});
@@ -523,7 +523,7 @@
 				}
 				let onSuccess = (result)=>this._updateTextNode(node,result,obj,state,updateIndex,signalObs);
 				let onError = ()=>this._updateTextNode(node,options.onError,obj,state,updateIndex,signalObs);
-				this.scopeDom.promiseToRAF(result,onSuccess,onError);
+				this.scopeDom.animFrameHelper.promiseToRAF(result,onSuccess,onError);
 				return;
 			}
 			// Ignore old calls
@@ -566,7 +566,7 @@
 			if(result instanceof Promise){
 				let onSuccess = (result)=>this._updateAttribute(element,attribute,result,obj,state,updateIndex,signalObs);
 				let onError = ()=>this._updateAttribute(element,attribute,options.onError,obj,state,updateIndex,signalObs);
-				this.scopeDom.promiseToRAF(result,onSuccess,onError);
+				this.scopeDom.animFrameHelper.promiseToRAF(result,onSuccess,onError);
 				return;
 			}
 			// Ignore old calls
@@ -583,7 +583,7 @@
 			if(result instanceof Promise){
 				let onSuccess = (result)=>this._updateBind(element,isHTML,result,obj,state,updateIndex,signalObs);
 				let onError = ()=>this._updateBind(element,isHTML,options.onError,obj,state,updateIndex,signalObs);
-				this.scopeDom.promiseToRAF(result,onSuccess,onError);
+				this.scopeDom.animFrameHelper.promiseToRAF(result,onSuccess,onError);
 				return;
 			}
 			// Ignore old calls

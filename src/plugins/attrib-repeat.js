@@ -314,7 +314,7 @@
 				updateIndex = state.updateIndex;
 			}
 			// Handle Result
-			if(execResult instanceof Promise) this.scopeDom.promiseToRAF(execResult,this._handleRepeatDOM.bind(this,plugInfo,state,updateIndex));
+			if(execResult instanceof Promise) this.scopeDom.animFrameHelper.promiseToRAF(execResult,this._handleRepeatDOM.bind(this,plugInfo,state,updateIndex));
 			else this._handleRepeatDOM(plugInfo,state,updateIndex,execResult);
 		}
 		

@@ -1,7 +1,7 @@
 
 import {
 	noopFn, noopAsyncFn, deferFn,
-	requestAF, onceRAF, promiseToRAF, regexMatchAll, regexExec, regexTest,
+	animFrameHelper, regexMatchAll, regexExec, regexTest,
 	elementNodeType, commentNodeType, textNodeType,
 	getPrototypeOf, getOwnPropertyDescriptor, defineProperty, hasOwn,
 	objectProto, nodeProto, elementProto, functionProto, functionAsyncProto, nativeProtos, nativeConstructors,
