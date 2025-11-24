@@ -2,20 +2,23 @@
   "name": "scope-dom",
   "version": "0.0.1",
   "description": "[Experimental] Declarative HTML logic & behaviour, with hierarchical scoping",
-  "main": ".",
-  "browser": {
-    "core": "./core/scope-dom-core.js"
-  },
+  "type": "module",
+  "module": "./core/scopedom.js",
   "directories": {
     "test": "tests"
-  },
-  "scripts": {
-    "server": "npx http-server ./ -c-1 -p 8181"
   },
   "author": "unchosen.aus@gmail.com",
   "license": "copyright",
   "repository": {
     "type": "git",
     "url": "https://github.com/Jashepp/Scope-dom"
+  },
+  "devDependencies": {
+    "rollup": "^4.53.3"
+  },
+  "scripts": {
+    "build": "rollup -c --filterLogs !code:CIRCULAR_DEPENDENCY",
+    "server": "npx http-server ./ -c-1 -p 8181",
+    "build:watch": "rollup -c --watch --filterLogs !code:CIRCULAR_DEPENDENCY"
   }
 }
