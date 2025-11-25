@@ -64,7 +64,7 @@ class scopeDom {
 	}
 
 	static controller(name,fn){
-		return getInstance().controller(name,fn);
+		return scopeDom.getInstance().controller(name,fn);
 	}
 	
 	static pluginAdd(plugin){

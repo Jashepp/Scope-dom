@@ -11,17 +11,26 @@ let defaults = {
 	},
 	watch: !!isWatch,
 };
+let pluginUMD = { format:"umd", name:"scopeDomPlugins", extend:true, exports:"named" };
+let pluginESM = { format:"es" };
 
 let config = [
 	// Core UMD
-	{ input:"./src/scopedom.js", output:{ file:"./dist/scopedom.umd.js", format:"umd", name:"scopeDom" } },
+	{ input:"./src/scopedom.js", output:{ file:"./dist/scopedom.umd.js", format:"umd", name:"scopeDom", extend:true, exports:"default" } },
 	// Core Module
-	{ input:"./src/scopedom.js", output:{ file:"./dist/scopedom.esm.js", format:"es" } },
-	// Plugins
-	{ input:"./src/plugins/attrib-cloak.js", output:{ file:"./dist/plugins/attrib-cloak.js" } },
-	{ input:"./src/plugins/attrib-if.js", output:{ file:"./dist/plugins/attrib-if.js" } },
-	{ input:"./src/plugins/attrib-parse.js", output:{ file:"./dist/plugins/attrib-parse.js" } },
-	{ input:"./src/plugins/attrib-repeat.js", output:{ file:"./dist/plugins/attrib-repeat.js" } },
+	{ input:"./src/scopedom.js", output:{ file:"./dist/scopedom.js", format:"es" } },
+	// Plugin cloak
+	{ input:"./src/plugins/cloak.js", output:{ file:"./dist/plugins/cloak.umd.js", ...pluginUMD } },
+	{ input:"./src/plugins/cloak.js", output:{ file:"./dist/plugins/cloak.js", ...pluginESM } },
+	// Plugin parse
+	{ input:"./src/plugins/parse.js", output:{ file:"./dist/plugins/parse.umd.js", ...pluginUMD } },
+	{ input:"./src/plugins/parse.js", output:{ file:"./dist/plugins/parse.js", ...pluginESM } },
+	// Plugin if
+	{ input:"./src/plugins/if.js", output:{ file:"./dist/plugins/if.umd.js", ...pluginUMD } },
+	{ input:"./src/plugins/if.js", output:{ file:"./dist/plugins/if.js", ...pluginESM } },
+	// Plugin repeat
+	{ input:"./src/plugins/repeat.js", output:{ file:"./dist/plugins/repeat.umd.js", ...pluginUMD } },
+	{ input:"./src/plugins/repeat.js", output:{ file:"./dist/plugins/repeat.js", ...pluginESM } },
 ];
 
 for(let fileConfig of config){
