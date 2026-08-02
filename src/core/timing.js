@@ -87,7 +87,7 @@ export class timing {
 	
 	static #handleOnRender(state){
 		if(state.ranRender) return;
-		if(!state.ranCompute && state.computeFn) onCompute();
+		if(!state.ranCompute && state.computeFn) timing.#handleOnCompute();
 		state.ranRender = true;
 		try{ state.renderFn(state.result); }catch(err){ console.error(err); }
 	}

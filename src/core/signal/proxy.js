@@ -357,7 +357,7 @@ export class signalProxy {
 	 * @param {string} prop - Property name to get descriptor for
 	 * @returns {PropertyDescriptor} The property descriptor from the target, or undefined if not found
 	 */
-	static getOwnPropertyDescriptor(obj,prop){ mtCacheGetDefinedProperty(obj.target,prop); }
+	static getOwnPropertyDescriptor(obj,prop){ return mtCacheGetDefinedProperty(obj.target,prop); }
 	
 	/**
 	 * Proxy handler for `setPrototypeOf` (setPrototypeOf trap).

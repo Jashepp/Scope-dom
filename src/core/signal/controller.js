@@ -264,7 +264,7 @@ export class signalController {
 		let signal = value instanceof signalInstance ? value : this.createSignal(value), sGet, sSet;
 		if(useOriginal && oSet){
 			if(oGet) sGet = this.#defineSignalGetterWrapper.bind(this,signal,oGet,obj);
-			sSet = this.#defineSignalSetterWrapper.bind(this,signal,oGet,obj);
+			sSet = this.#defineSignalSetterWrapper.bind(this,signal,oSet,obj);
 		}
 		if(!sGet) sGet = signal.get.bind(signal);
 		if(!sSet) sSet = signal.set.bind(signal);
@@ -278,9 +278,8 @@ export class signalController {
 		return signal.get();
 	}
 	
-	#defineSignalSetterWrapper(signal,oGet,obj){
-		oSet.apply(obj,[v]);
-		if(oGet) v = oGet.apply(obj);
+	#defineSignalSetterWrapper(signal,oSet,obj,v){
+		if(oSet) v = oSet.apply(obj,[v]);
 		return signal.set(v);
 	}
 	

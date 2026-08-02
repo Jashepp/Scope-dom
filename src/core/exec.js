@@ -132,8 +132,6 @@ export class execExpression {
 	/** @type {WeakMap} Cache generated functions to lower memory usage */
 	static #expCache = new WeakMap();
 	
-	static #fnNameRegex = /[^A-Za-z0-9\$]/g;
-	
 	/**
 	 * Generate wrapper code for an expression.
 	 * 
@@ -209,7 +207,7 @@ export class execExpression {
 		// If both globalsHide and throwGlobals are true, throw on global access
 		if(globalsHide && throwGlobals) globalCatch = execExpression.#throwGlobalAccessError;
 		// If argument is provided, add it to unscopables
-		if(argument?.length>0){ unscopables = { [argument]:true }; args = args.concat(argument); }
+		if(argument?.length>0){ unscopables = { __proto__:null, [argument]:true }; args = args.concat(argument); }
 		// Turn mainScopes & extraScopes into getScopes & setScopes
 		let { getScopes, setScopes } = execExpression.#parseScopes(mainScopes,extraScopes);
 		// Create proxy with resolved options

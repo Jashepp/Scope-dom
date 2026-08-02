@@ -265,7 +265,7 @@ class ScopeDom {
 	 * @param {ScopeDomCtrlCallback} [fn] Scope Controller Function
 	 * @returns {ScopeDom} ScopeDom instance
 	 */
-	static controller(name,fn){
+	static controller(name=null,fn=null){
 		return ScopeDom.getInstance().controller(name,fn);
 	}
 	
@@ -403,7 +403,7 @@ class ScopeDom {
 	 * @returns {ScopeDom} ScopeDom instance
 	 * @throws {Error} If arguments are incorrect, or if the named controller already exists
 	 */
-	controller(name,fn){
+	controller(name=null,fn=null){
 		if(typeof name==="function") return this.controller(null,name);
 		if(name===null || name===false || name===void 0) name = null;
 		if(fn===null || fn===false || fn===void 0) fn = null;
