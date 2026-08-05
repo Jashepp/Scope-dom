@@ -109,13 +109,21 @@ export class builtinAttributes {
 	 */
 	onDisconnect(element,attribs,elementScopeCtrl){
 		let instance = this.instance;
-		for(let [nameParts,attrib] of attribs){
+		for(let [attribName,attrib] of attribs){
+			let { nameParts, value } = attrib;
 			let [ name ] = nameParts;
 			if(name==='default') continue;
+			let options = instance.elementAttribOptionsWithDefaults(element,attrib);
 			// Handle deinit / disconnect attributes
 			if(nameParts.length===1 && (name==='deinit' || name==='disconnect')){
 				let options = this.elementAttribOptionsWithDefaults(element,attrib);
 				this.#attrDisconnect(element,attrib,elementScopeCtrl,options);
+				continue;
+			}
+			// Class Attribute
+			if(nameParts.length===1 && name==='class' && attrib.value!==null){
+				this.#attrClassUndo(element,attrib,elementScopeCtrl,options);
+				continue;
 			}
 		}
 	}
@@ -275,11 +283,13 @@ export class builtinAttributes {
 	#attrClass(element,attrib,elementScopeCtrl,options,value,onReadyQueue){
 		let instance = this.instance;
 		let { attribute:$attribute } = attrib;
-		let obs = instance.scopeCtrl.signalCtrl.createObserver();
 		let defaultClasses = element.getAttribute('class') ?? '';
+		element[this.#attrClassDefaultSymbol] = defaultClasses;
+		element[this.#attrClassAbortSymbol] = { abort:false };
 		let { runFn } = instance.elementExecExp(elementScopeCtrl,value,{ __proto__:null, $attribute, $original:defaultClasses },{ __proto__:null, run:false, useReturn:true });
+		let obs = instance.scopeCtrl.signalCtrl.createObserver();
 		runFn = obs.wrapRecorder(runFn);
-		let computeFn = this.#attrClass_compute.bind(this,obs,runFn,defaultClasses);
+		let computeFn = this.#attrClass_compute.bind(this,element,obs,runFn,defaultClasses);
 		let renderFn = this.#attrClass_render.bind(this,element);
 		let updateFn = timing.queueComputeThenRender.bind(null,computeFn,renderFn);
 		onReadyQueue.push(updateFn);
@@ -289,13 +299,28 @@ export class builtinAttributes {
 		instance.registerElementRelatedEvent(element,removeListener);
 	}
 	
-	#attrClass_compute(obs,runFn,defaultClasses){
+	#attrClassDefaultSymbol = Symbol('$attrClassDefault');
+	#attrClassAbortSymbol = Symbol('$attrClassAbortSymbol');
+	
+	#attrClassUndo(element,attrib,elementScopeCtrl,options){
+		if(this.#attrClassDefaultSymbol in element){
+			let value = element[this.#attrClassDefaultSymbol];
+			if((value??'')==='') element.removeAttribute('class');
+			else element.setAttribute('class',element.className=value);
+			delete element[this.#attrClassDefaultSymbol];
+			element[this.#attrClassAbortSymbol].abort = true;
+		}
+	}
+	
+	#attrClass_compute(element,obs,runFn,defaultClasses){
+		if(element[this.#attrClassAbortSymbol].abort) return;
 		obs.clearSignals();
 		let result = runFn();
+		if(typeof result==='string') return defaultClasses.length>0 ? defaultClasses+' '+result : result;
 		// If array, simply append it after default classes
-		if(result instanceof Array || result instanceof Set){
+		else if(result instanceof Array || result instanceof Set){
 			let classList = Array.from(result).filter(this.#attrClass_filterArray);
-			return defaultClasses+' '+classList.join(' ');
+			return defaultClasses.length>0 ? defaultClasses+' '+classList.join(' ') : classList.join(' ');
 		}
 		// If object or map, disable any existing classes if needed, and add new classes
 		else if(result instanceof Map || result===Object(result)){
@@ -310,6 +335,7 @@ export class builtinAttributes {
 	}
 	
 	#attrClass_render(element,newClassName){
+		if(element[this.#attrClassAbortSymbol].abort) return;
 		if(newClassName!==void 0) element.className = newClassName;
 	}
 	
