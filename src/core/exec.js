@@ -229,7 +229,7 @@ export class execExpression {
 			cacheMap.set(fnKey,genFn);
 		}
 		// Error logging callback
-		DEV: logFnError = execExpression.#logExpError.bind(null,expression,genFn,proxyObj);
+		DEV: { logFnError = execExpression.#logExpError.bind(null,expression,genFn,proxyObj); }
 		// Create function using Function constructor with dynamic arguments
 		try{ runFn = genFn.bind(fnThis||proxy,proxy,logFnError); }
 		catch(err){ logFnError(err); }

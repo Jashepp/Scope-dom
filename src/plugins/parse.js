@@ -142,7 +142,7 @@ export class pluginParse {
 		let onlyOnceOption = instance.elementAttribParseOption(element,attributeOptions,'once',{ default:false, emptyTrue:true, runExp:true }); // $parse:once
 		let updateScopeEventOption = instance.elementAttribParseOption(element,attributeOptions,'update scope',{ default:'$update', emptyTrue:false, runExp:true }); // $parse:update-scope='event', $emit('event')
 		let updateDomEventOption = instance.elementAttribParseOption(element,attributeOptions,'update dom',{ default:'$update', emptyTrue:false, runExp:true }); // $parse:update-dom='event', $emitDom('event')
-		let errorHandler = instance.elementAttribParseOption(element,attributeOptions,'error',{ default:'', emptyTrue:false, runExp:true }); // $parse:error
+		let onError = instance.elementAttribParseOption(element,attributeOptions,'error',{ default:'', emptyTrue:false, runExp:true }); // $parse:error
 		let allowDomResult = instance.elementAttribParseOption(element,attributeOptions,'allow dom',{ default:false, emptyTrue:true, runExp:true }); // $parse:allow-dom
 		let visibleOption = instance.elementAttribParseOption(element,attributeOptions,'visible',{ default:false, emptyTrue:true, runExp:true }); // $parse:visible
 		let defaultTextOption = instance.elementAttribParseOption(element,attributeOptions,'default text',{ default:'...', emptyTrue:false, runExp:true }); // $parse:default-text
@@ -211,7 +211,7 @@ export class pluginParse {
 			element, normalize:null, parseNodes:new Map(), attributeParseNames, attributeParseMap, nodesPending:false, parsePending:false, isVisible:false,
 			options:{ __proto__:null,
 				parseTreeOption:parseTreeOption.value, parseTextOption:parseTextOption.value, onlyOnceOption:onlyOnceOption.value, updateScopeEventOption:updateScopeEventOption.value, updateDomEventOption:updateDomEventOption.value,
-				errorHandler:errorHandler.value, allowDomResult:allowDomResult.value, onVisible:visibleOption.value, defaultTextOption:defaultTextOption.value,
+				onError:onError.value, allowDomResult:allowDomResult.value, onVisible:visibleOption.value, defaultTextOption:defaultTextOption.value,
 				excludeOption:excludeOption.value, expressionRegex, safeBindOption, htmlBindOption, safeMode:safeModeOption.value
 			}
 		};
@@ -500,7 +500,7 @@ export class pluginParse {
 				if(expressionArray.length===1) exp = expressionArray[0];
 				else exp = `[${expressionArray.join(',')}].join('')`;
 				if(!attribMap.has(name)) attribMap.set(name,{ __proto__:null, exec:null, signalObs:null, exp, original:nodeText, updateIndex:0 });
-				DEV: if(name==='class') console.warn("ScopeDom Recommendation: Use $class instead of $parse attrib class.",e);
+				DEV: { if(name==='class') console.warn("ScopeDom Recommendation: Use $class instead of $parse attrib class.",e); }
 			}
 		}
 	}

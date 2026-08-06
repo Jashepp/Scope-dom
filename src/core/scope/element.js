@@ -206,7 +206,7 @@ export class scopeElementController {
 	$emitDomUpdate(suffix='',emitSelf=false){
 		if(this.isDuringUpdateDom) return; // Ignore DOM Update during DOM Update (for same element)
 		if(this.ctrl.isDuringUpdate) return; // Ignore DOM Update during Scope Update
-		if(this.ScopeDomInstance.isDuringOnReady) return; // Ignore DOM Update during On Ready
+		if(this.ctrl.ScopeDomInstance.isDuringOnReady) return; // Ignore DOM Update during On Ready
 		let evt = '$update'+(suffix?.length>0?'-'+suffix:'');
 		let emitUpdate = this.#emitUpdate.bind(this,evt,void 0,emitSelf);
 		if(timing.isDuringRAF){ timing.deferTask(emitUpdate); }

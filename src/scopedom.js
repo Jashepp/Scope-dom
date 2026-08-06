@@ -81,7 +81,7 @@ const initOptionsDefaults = {
 	signalProxyAll: true,
 };
 let initOptionsScriptTag = null;
-DEV: initOptionsDefaults.dev = true;
+DEV: { initOptionsDefaults.dev = true; }
 
 /**
  * Default values for scope element attributes.

@@ -116,7 +116,7 @@ export class builtinAttributes {
 			let options = instance.elementAttribOptionsWithDefaults(element,attrib);
 			// Handle deinit / disconnect attributes
 			if(nameParts.length===1 && (name==='deinit' || name==='disconnect')){
-				let options = this.elementAttribOptionsWithDefaults(element,attrib);
+				let options = instance.elementAttribOptionsWithDefaults(element,attrib);
 				this.#attrDisconnect(element,attrib,elementScopeCtrl,options);
 				continue;
 			}

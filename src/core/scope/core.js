@@ -285,7 +285,7 @@ export class scopeController {
 		this.eventRegistry = new eventRegistry();
 		this.eventTarget = (eventTarget && eventTarget instanceof EventTarget) ? eventTarget : new EventTarget();
 		this.verbose = false;
-		this.topCtrl = parentCtrl?.topCtrl || null;
+		this.topCtrl = parentCtrl?.topCtrl || parentCtrl || null;
 		this.parentCtrl = parentCtrl || null;
 		this.isolated = isolated;
 		/** @type {scopeInstance} */

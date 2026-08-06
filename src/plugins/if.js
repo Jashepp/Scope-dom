@@ -281,19 +281,19 @@ export class pluginIf {
 		ifCaseAttributeValue = ifAttributes.has('if case') ? ifAttributes.get('if case').value : false;
 		let isOnlyMatchMode = ((ifMatchAttributeValue?.length>0 || ifMatchAttributeValue===null) && !expressionAttrib);
 		// Options
-		let onlyOnceOption = instance.elementAttribParseOption(element,attribOpts,'once',{ default:false, emptyTrue:true, runExp:true }); // $if:once
-		let domRemoveOption = instance.elementAttribParseOption(element,attribOpts,'dom',{ default:false, emptyTrue:true, runExp:true }); // $if:dom or  $if:dom='exp' - same as $if='exp' $if:dom
+		let onlyOnce = instance.elementAttribParseOption(element,attribOpts,'once',{ default:false, emptyTrue:true, runExp:true }); // $if:once
+		let domRemove = instance.elementAttribParseOption(element,attribOpts,'dom',{ default:false, emptyTrue:true, runExp:true }); // $if:dom or  $if:dom='exp' - same as $if='exp' $if:dom
 		let updateEvent = instance.elementAttribParseOption(element,attribOpts,'update scope',{ default:'$update', emptyTrue:false, runExp:true }).value; // $if:update-scope='event', $emit('event')
 		let updateDomEvent = instance.elementAttribParseOption(element,attribOpts,'update dom',{ default:'$update', emptyTrue:false, runExp:true }).value; // $if:update-dom='event', $emitDom('event')
 		let onShowEvent = instance.elementAttribParseOption(element,attribOpts,'on show',{ default:null, emptyTrue:false, runExp:false }).value; // $if:on-show='exp'
 		let onHideEvent = instance.elementAttribParseOption(element,attribOpts,'on hide',{ default:null, emptyTrue:false, runExp:false }).value; // $if:on-hide='exp'
 		let defaultValue = instance.elementAttribParseOption(element,attribOpts,'default',{ default:false, emptyTrue:false, runExp:true }).value; // $if:default='true' (eg, promise)
 		// State
-		onlyOnceOption=(onlyOnceOption.value===true); domRemoveOption=(domRemoveOption.value===true);
+		onlyOnce = (onlyOnce.value===true); domRemove = (domRemove.value===true);
 		let state = { __proto__:null,
 			signalCtrl: elementScopeCtrl.ctrl.signalCtrl, signalObs:null,
 			element, isOnlyMatchMode, ifAttributeValue, ifElseAttributeValue, ifMatchAttributeValue, ifCaseAttributeValue, matchOpts, depList:null,
-			options:{ __proto__:null, onlyOnceOption, domRemoveOption, onShowEvent, onHideEvent, defaultValue },
+			options:{ __proto__:null, onlyOnce, domRemove, onShowEvent, onHideEvent, defaultValue },
 			showing:null, exec:null, execMatch:null, anchor:null, defaultDisplay:null, onShowExec:null, onHideExec:null, updateIndex:0,
 			isTemplate, tplNodes:null, tplAnchorStart:null, tplAnchorEnd:null, tplDefaultDisplay:null,
 		};
