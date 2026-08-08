@@ -71,21 +71,21 @@ export class pluginCloak {
 		if(value===null || value==='') value = 'ready() && loaded()';
 		// Expression Function
 		let runExpFn = state.runExpFn = this.#runExpression.bind(this,plugInfo,attrib,state,value);
-		// Early Check
-		if(runExpFn()) return;
 		// Swap DOM
-		if(domSwap && element.nodeName!=='TEMPLATE'){
+		if((domSwap && element.nodeName!=='TEMPLATE') || tplSwap){
 			state.anchor = anchor = document.createComment(` Cloak-Anchor ${instance.dev?element.cloneNode(false).outerHTML:''} `);
 			state.scope.$anchor = anchor;
-			state.scope.loaded = instance.isElementLoaded.bind(instance,anchor,false,false),
+			state.scope.loaded = instance.isElementLoaded.bind(instance,anchor,false,false);
+			instance.elementScopeSetAlias(anchor,element);
 			element.replaceWith(anchor);
-			this.#removeAttribs(element,attrib,attribOpts);
+			if(domSwap) this.#removeAttribs(element,attrib,attribOpts);
 			anchorScopeCtrl = state.anchorScopeCtrl = this.instance.elementScopeCtrl(anchor);
 		}
 		// Register Events
 		if(updateEvent?.length>0) this.#registerEventRemoval(element,elementScopeCtrl.ctrl.$on(updateEvent,runExpFn,{ capture:false, passive:true },true));
+		if(updateEvent?.length>0 && anchor) this.#registerEventRemoval(anchor,anchorScopeCtrl.ctrl.$on(updateEvent,runExpFn,{ capture:false, passive:true },true));
 		if(updateDomEvent?.length>0) this.#registerEventRemoval(element,elementScopeCtrl.$onDom(updateDomEvent,runExpFn,{ capture:true, passive:true },true));
-		if(updateDomEvent?.length>0 && anchor) this.#registerEventRemoval(element,anchorScopeCtrl.$onDom(updateDomEvent,runExpFn,{ capture:true, passive:true },true));
+		if(updateDomEvent?.length>0 && anchor) this.#registerEventRemoval(anchor,anchorScopeCtrl.$onDom(updateDomEvent,runExpFn,{ capture:true, passive:true },true));
 		// Listen
 		instance.onElementLoaded(anchor||element,runExpFn);
 		instance.onReady(runExpFn,false);
@@ -159,19 +159,23 @@ export class pluginCloak {
 		// Remove from state
 		this.#stateMap.delete(element);
 		// Remove event listeners
-		if(this.#eventMap.has(element)){
-			let set = this.#eventMap.get(element);
+		for(let e of [element,anchor]) if(e && this.#eventMap.has(e)){
+			let set = this.#eventMap.get(e);
 			for(let removeEvent of set) removeEvent();
-			this.#eventMap.delete(element);
+			this.#eventMap.delete(e);
+		}
+		// Template Swap $cloak:swap
+		if(tplSwap && anchor?.isConnected && !element.isConnected){
+			for(let e of Array.from(element.content.cloneNode(true).childNodes)){
+				instance.elementScopeSetAlias(e,anchor);
+				anchor.parentNode.insertBefore(e,anchor);
+			}
+			anchor.parentNode.removeChild(anchor);
 		}
 		// Swap DOM
-		if(anchor?.isConnected && !element.isConnected){
+		else if(anchor?.isConnected && !element.isConnected){
 			instance.elementScopeSetAlias(element,anchor);
 			anchor.replaceWith(element);
-		}
-		// Template Swap
-		if(tplSwap){
-			
 		}
 	}
 	
