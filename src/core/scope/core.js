@@ -308,7 +308,7 @@ export class scopeController {
 	$emitScopeUpdate(suffix=''){
 		let evt = '$update'+(suffix?.length>0?'-'+suffix:'');
 		let emitUpdate = this.#emitUpdate.bind(this,evt);
-		if(timing.isDuringRAF || this.ScopeDomInstance.isDuringOnReady || this.isDuringUpdate) timing.deferTask(emitUpdate);
+		if(timing.isDuringRAF || this.ScopeDomInstance?.isDuringOnReady || this.isDuringUpdate) timing.deferTask(emitUpdate);
 		else timing.onceAnimation(this.scope,evt,emitUpdate,true);
 	}
 	
@@ -419,7 +419,7 @@ export class scopeController {
 		options = { __proto__:null, capture:true, passive:false, ...options };
 		this.eventRegistry.add(target,name,listener,options);
 		let remove = this.eventRegistry.remove.bind(this.eventRegistry,target,name,listener,options);
-		if(target instanceof Element) this.ScopeDomInstance.registerElementRelatedEvent(target,remove);
+		if(target instanceof Element) this.ScopeDomInstance?.registerElementRelatedEvent(target,remove);
 		if(returnRemove) return remove;
 	}
 	

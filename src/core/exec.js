@@ -213,20 +213,22 @@ export class execExpression {
 		// Create proxy with resolved options
 		let proxyObj = { __proto__:null, ...execExpProxyDefaults, mainScopes, getScopes, setScopes, scopeUseOwn, silentHas, globalObj, globalsHide, globalCatch, scopeCtrl, useSignalProxy, unscopables };
 		let proxy = new execExpressionProxy(proxyObj);
-		// Retrieve function from cache
-		let runFn, expCache = execExpression.#expCache, genFn, cacheMap, logFnError = noopFn;
-		let fnKey = this.#genExpKey(expression,options,args);
-		if(!expCache.has(sourceElement)) expCache.set(sourceElement,cacheMap = new Map());
-		else cacheMap = expCache.get(sourceElement);
-		if(cacheMap.has(fnKey)) genFn = cacheMap.get(fnKey);
+		// Retrieve function from cache (per source element, keyed by expression + options)
+		let runFn, fnKey, expCache = execExpression.#expCache, genFn, cacheMap, logFnError = noopFn;
+		if(sourceElement){
+			fnKey = this.#genExpKey(expression,options,args);
+			if(!expCache.has(sourceElement)) expCache.set(sourceElement,cacheMap = new Map());
+			else cacheMap = expCache.get(sourceElement);
+			if(cacheMap.has(fnKey)) genFn = cacheMap.get(fnKey);
+		}
 		// Generate final function code with expression
-		else {
+		if(!genFn) {
 			let fnCode = execExpression.#generateCode(expression,options);
 			// Get constructor from functionProto or functionAsyncProto
 			let fnc = useAsync ? functionAsyncProto.constructor : functionProto.constructor;
 			// Create new function & cache it
 			genFn = new fnc(args,fnCode);
-			cacheMap.set(fnKey,genFn);
+			if(cacheMap) cacheMap.set(fnKey,genFn);
 		}
 		// Error logging callback
 		DEV: { logFnError = execExpression.#logExpError.bind(null,expression,genFn,proxyObj); }

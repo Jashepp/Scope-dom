@@ -351,6 +351,8 @@ class ScopeDom {
 		this.builtinAttribs = new builtinAttributes(this);
 		/** @type {boolean} */
 		this.dev = !!this.options.dev;
+		// Dev-friendly notice
+		DEV: { if(this.dev && !options.signalProxyAll) console.warn("ScopeDom: signalProxyAll is `false`, signal reactivity will be disabled for most expressions"); }
 		// Plugins
 		/** @type {object} Plugin system object */
 		this.plugins = { init:false, register:new Set(), onConnect:new Set(), onDisconnect:new Set(), onPluginAdd:new Set(), onExpression:new Set() };

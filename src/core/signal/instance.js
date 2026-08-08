@@ -127,7 +127,7 @@ export class signalInstance {
 	 * @private
 	 */
 	get #promise(){ return this.#useWeakRef ? this.#_promise?.deref() : this.#_promise; }
-	set #promise(v){ this.#_promise = v; }
+	set #promise(v){ this.#_promise = this.#useWeakRef ? new WeakRef(v) : v; }
 	
 	/**
 	 * Internal function to set the signal value without triggering change notifications.
@@ -324,7 +324,7 @@ export class signalInstance {
 	 * 
 	 * @returns {any} The signal's value as a primitive, or the raw value itself if value.valueOf doesn't exist
 	 */
-	valueOf(){ let v=this.get(); return v?.valueOf?v?.valueOf?.(v):v; }
+	valueOf(){ let v=this.get(); return v?.valueOf?v?.valueOf?.():v; }
 	
 	/**
 	 * Allows the signal to be used with the Promise method .then().

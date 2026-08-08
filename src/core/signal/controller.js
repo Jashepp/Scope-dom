@@ -262,8 +262,10 @@ export class signalController {
 	defineSignal(obj,prop,value=void 0,descriptor={},useOriginal=true){
 		let { configurable=true, enumerable=true, get:oGet=null, set:oSet=null } = { __proto__:null, ...descriptor };
 		let signal = value instanceof signalInstance ? value : this.createSignal(value), sGet, sSet;
+		if(useOriginal && oGet){
+			sGet = this.#defineSignalGetterWrapper.bind(this,signal,oGet,obj);
+		}
 		if(useOriginal && oSet){
-			if(oGet) sGet = this.#defineSignalGetterWrapper.bind(this,signal,oGet,obj);
 			sSet = this.#defineSignalSetterWrapper.bind(this,signal,oSet,obj);
 		}
 		if(!sGet) sGet = signal.get.bind(signal);

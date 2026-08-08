@@ -140,6 +140,7 @@ export class builtinAttributes {
 	 */
 	#attrSwap(element,attribs){
 		let anchor = document.createComment(` Template-Swap-Anchor ${this.instance.dev?element.cloneNode(false).outerHTML:''} `);
+		this.instance.elementScopeSetAlias(anchor,element);
 		element.parentNode.replaceChild(anchor,element);
 		this.instance.onElementLoaded(anchor,this.#attrSwap_onElementLoaded.bind(this,element,attribs,anchor));
 	}
@@ -152,7 +153,7 @@ export class builtinAttributes {
 			for(let a of element.attributes) dom.attributes.setNamedItem(a.cloneNode(false));
 			dom.appendChild(fragment);
 		}
-		anchor.parentNode.replaceChild(dom,anchor);
+		anchor.replaceWith(dom);
 	}
 	
 	/**
