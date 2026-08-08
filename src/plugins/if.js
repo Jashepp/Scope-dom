@@ -243,7 +243,7 @@ export class pluginIf {
 		// Skip when existing state
 		if(this.#stateMap.has(element)) return;
 		// Skip empty template
-		if(isTemplate && !(element.content?.childNodes?.length>0)) return console.warn("pluginIf: template has no content");
+		if(isTemplate && !(element.content?.childNodes?.length>0)) return console.warn("pluginIf: template has no content",element);
 		// Value / Expression
 		let expression = null, expressionAttrib = null;
 		for(let [nameKey,attrib] of ifAttributes){
@@ -279,7 +279,7 @@ export class pluginIf {
 		ifElseAttributeValue = ifAttributes.has('if else') ? ifAttributes.get('if else').value : false,
 		ifMatchAttributeValue = ifAttributes.has('if match') ? ifAttributes.get('if match').value : false,
 		ifCaseAttributeValue = ifAttributes.has('if case') ? ifAttributes.get('if case').value : false;
-		let isOnlyMatchMode = ((ifMatchAttributeValue?.length>0 || ifMatchAttributeValue===null) && !expressionAttrib);
+		let isOnlyMatchMode = ((ifMatchAttributeValue?.length===0 || ifMatchAttributeValue===null) && !expressionAttrib);
 		// Options
 		let onlyOnce = instance.elementAttribParseOption(element,attribOpts,'once',{ default:false, emptyTrue:true, runExp:true }); // $if:once
 		let domRemove = instance.elementAttribParseOption(element,attribOpts,'dom',{ default:false, emptyTrue:true, runExp:true }); // $if:dom or  $if:dom='exp' - same as $if='exp' $if:dom
@@ -292,14 +292,14 @@ export class pluginIf {
 		onlyOnce = (onlyOnce.value===true); domRemove = (domRemove.value===true);
 		let state = { __proto__:null,
 			signalCtrl: elementScopeCtrl.ctrl.signalCtrl, signalObs:null,
-			element, isOnlyMatchMode, ifAttributeValue, ifElseAttributeValue, ifMatchAttributeValue, ifCaseAttributeValue, matchOpts, depList:null,
+			element, ifAttributeValue, ifElseAttributeValue, ifMatchAttributeValue, ifCaseAttributeValue, matchOpts, depList:null,
 			options:{ __proto__:null, onlyOnce, domRemove, onShowEvent, onHideEvent, defaultValue },
 			showing:null, exec:null, execMatch:null, anchor:null, defaultDisplay:null, onShowExec:null, onHideExec:null, updateIndex:0,
 			isTemplate, tplNodes:null, tplAnchorStart:null, tplAnchorEnd:null, tplDefaultDisplay:null,
 		};
 		if(!this.#stateMap.has(element)) this.#stateMap.set(element,state);
-		// Skip if only if-match (after state is set)
-		if(isOnlyMatchMode) return;
+		// Skip if only empty if-match (after state is set)
+		if(isOnlyMatchMode) return console.warn("pluginIf: empty if-match",element);
 		// Trigger Exec
 		let triggerExec = this.#runIfExpressions.bind(this,plugInfo,expressionAttrib,state,expression);
 		// Add $if() to element & element context
