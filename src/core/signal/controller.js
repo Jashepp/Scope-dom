@@ -421,29 +421,28 @@ export class signalController {
 	 */
 	defineProxySignal(obj,prop,value,signal=null,silentFallback=false){
 		if(!silentFallback && value!==Object(value)) throw new TypeError("defineProxySignal target must not be a primitive, try defineSignal instead");
-		let set, state = { value };
+		let set, state = { __proto__:null, value };
 		if(value===Object(value)){
 			value = new signalProxy(value,this,signal);
 			if(!signal) signal = signalProxy._getProxySignal(value);
-			set = this.#defineProxySignalSetter.bind(this,signal,obj,prop);
+			set = this.#defineProxySignalSetter.bind(this,state,signal,obj,prop);
 		} else {
-			if(!signal) signal = new signalInstance(this,value);
+			if(!signal) signal = new signalInstance(this,void 0);
 			set = this.#defineProxySignalSetterFallback.bind(this,state,signal,obj,prop);
 		}
-		let get = this.#defineProxySignalGetter.bind(this,signal,state);
+		let get = this.#defineProxySignalGetter.bind(this,state,signal);
 		get[signalSymb] = set[signalSymb] = signal;
 		mtCacheDefineProperty(obj,prop,{ __proto__:null, configurable:true, enumerable:true, get, set });
 		signal.record(); signal.set(value);
 		return value;
 	}
 	
-	#defineProxySignalGetter(signal,state){
-		signal.record();
-		return state.value;
+	#defineProxySignalGetter(state,signal){
+		return signal.get();
 	}
 	
-	#defineProxySignalSetter(signal,obj,prop,newValue){
-		this.defineProxySignal(obj,prop,newValue,signal,true);
+	#defineProxySignalSetter(state,signal,obj,prop,newValue){
+		this.defineProxySignal(obj,prop,state.value=newValue,signal,true);
 		return true;
 	}
 	

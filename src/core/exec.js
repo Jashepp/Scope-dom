@@ -52,6 +52,8 @@ export const execExpOptionsDefaults = {
 	scopeCtrl: null,
 	/** @type {boolean} Auto-create signal proxies for non-primitive values */
 	useSignalProxy: false,
+	/** @type {boolean} Returns signals instead of auto-resolving their value within #getResolve */
+	returnSignals: false,
 	/** @type {HTMLElement|null} Source / Original element, for cache keys */
 	sourceElement: null,
 };
@@ -200,7 +202,7 @@ export class execExpression {
 	static buildExp(expression,mainScopes,extraScopes=[],options={}){
 		if(expression!==String(expression)) throw new Error("Invalid expression: "+expression);
 		options = { __proto__:null, ...execExpOptionsDefaults, ...options };
-		let { fnThis, useAsync, scopeUseOwn, silentHas, globalsHide, throwGlobals, scopeCtrl, useSignalProxy, argument, sourceElement } = options;
+		let { fnThis, useAsync, scopeUseOwn, silentHas, globalsHide, throwGlobals, scopeCtrl, useSignalProxy, returnSignals, argument, sourceElement } = options;
 		// Auto-detect async if expression contains 'await'. This could be done in a better way, but that would sacrifice performance.
 		useAsync = options.useAsync = useAsync || expression.indexOf('await')!==-1;
 		let globalObj = window, globalCatch = noopFn, unscopables = execExpProxyDefaults.unscopables, args = execExpression.#expDefaultArguments;
@@ -211,7 +213,7 @@ export class execExpression {
 		// Turn mainScopes & extraScopes into getScopes & setScopes
 		let { getScopes, setScopes } = execExpression.#parseScopes(mainScopes,extraScopes);
 		// Create proxy with resolved options
-		let proxyObj = { __proto__:null, ...execExpProxyDefaults, mainScopes, getScopes, setScopes, scopeUseOwn, silentHas, globalObj, globalsHide, globalCatch, scopeCtrl, useSignalProxy, unscopables };
+		let proxyObj = { __proto__:null, ...execExpProxyDefaults, mainScopes, getScopes, setScopes, scopeUseOwn, silentHas, globalObj, globalsHide, globalCatch, scopeCtrl, useSignalProxy, returnSignals, unscopables };
 		let proxy = new execExpressionProxy(proxyObj);
 		// Retrieve function from cache (per source element, keyed by expression + options)
 		let runFn, fnKey, expCache = execExpression.#expCache, genFn, cacheMap, logFnError = noopFn;
@@ -363,7 +365,11 @@ export class execExpressionProxy {
 			else return execExpressionProxy.#getResolve(obj,obj.globalObj,prop,obj.globalObj);
 		}
 		if(obj.useSignalProxy && obj.signalCtrl){
-			for(let s of obj.mainScopes) return obj.signalCtrl.defineProxySignal(s,prop,void 0,null,true);
+			for(let s of obj.mainScopes){
+				let signal = new signalInstance(obj.signalCtrl,void 0);
+				let newValue = obj.signalCtrl.defineProxySignal(s,prop,void 0,signal,true);
+				return obj.returnSignals ? signal : newValue;
+			}
 		}
 		return void 0;
 	}
@@ -525,15 +531,28 @@ export class execExpressionProxy {
 		// If using signalProxy on all scopes & expressions
 		if(obj.useSignalProxy && signalCtrl){
 			let signal, descriptor = mtCacheGetDefinedProperty(target,prop);
-			// Check if value or descriptor value is a signal
-			if(value instanceof signalInstance) signal = value;
-			else if(descriptor?.value instanceof signalInstance) signal = descriptor.value;
+			// Check if property is a signalInstance
+			if(descriptor?.value instanceof signalInstance) signal = descriptor.value;
 			else if(descriptor?.get?.[signalSymb] instanceof signalInstance) signal = descriptor.get[signalSymb];
-			if(signal!==void 0) return signal.get();
-			// If no signal, and value isn't primitive, create signalProxy for automatic reactive property access
-			if(descriptor?.configurable && signal===void 0 && value===Object(value)){
+			if(signal){
+				return obj.returnSignals ? signal : value;
+			}
+			// Resolve signal & value
+			signal = resolveSignal(value,null,true); // Signal or null
+			value = resolveSignal(value,null,false);
+			if(signal){
+				return obj.returnSignals ? signal : value;
+			}
+			// Auto-reactive property for non-primitive values
+			if(
+				!signal
+				&& (!descriptor || descriptor?.configurable)
+				&& !(descriptor?.get && !descriptor?.set) // Skip get-only descriptors, eg: $signal-name:watch $oldValue
+			){
 				// This modifies existing scope data
-				return signalCtrl.defineProxySignal(target,prop,value);
+				let signal = new signalInstance(signalCtrl,void 0);
+				let newValue = signalCtrl.defineProxySignal(target,prop,value,signal,true);
+				return obj.returnSignals ? (signal.record(), signal) : newValue;
 			}
 		}
 		return value;
@@ -561,8 +580,12 @@ export class execExpressionProxy {
 		if(descriptor?.value instanceof signalInstance) return descriptor.value.set(value), true;
 		// If using signalProxy on all scopes & expressions
 		if(obj.useSignalProxy && signalCtrl && !descriptor){
-			let signal = new signalInstance(signalCtrl,void 0);
-			return signalCtrl.defineProxySignal(target,prop,value,signal,true), true;
+			let signal = resolveSignal(value,null,true); // Signal or null
+			value = resolveSignal(value,null,false);
+			if(!signal){
+				signal = new signalInstance(signalCtrl,void 0);
+			}
+			return signalCtrl.defineProxySignal(target,prop,value,signal,true), signal.changed(), true;
 		}
 		// Otherwise, standard property set
 		return Reflect.set(target,prop,value,target);

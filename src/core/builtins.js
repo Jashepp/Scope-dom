@@ -363,7 +363,7 @@ export class builtinAttributes {
 				let oldValue, extra = { __proto__:null, $attribute, get $value(){ return signal?.get(); }, get $oldValue(){ return oldValue; } };
 				let { runFn:watchFn } = instance.elementExecExp(elementScopeCtrl,watchValue,extra,{ __proto__:null, run:false });
 				watchFn = obs.wrapRecorder(watchFn);
-				obs.addListener(function attribSignalWatchValue(obs,s,o){ oldValue=o; watchFn(); });
+				obs.addListener(function attribSignalWatchValue(o,s,oVal,nVal){ oldValue=signal?.getSilent(); watchFn(); });
 				instance.registerElementRelatedEvent(element,obs.clear.bind(obs));
 			}
 		}
