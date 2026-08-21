@@ -302,13 +302,14 @@ class ScopeDom {
 		if(options.onlyInstance) onlyInstance = this;
 		if(!mainInstance) mainInstance = this;
 		allInstances.add(this);
-		let scope = options.scope===Object(options.scope) ? options.scope : new scopeBase();
+		// Create Scope for scopeController
+		this.scope = options.scope===Object(options.scope) ? options.scope : new scopeBase();
 		/** @type {initOptionsDefaults} Configuration options for this instance */
 		this.options = options;
 		/** @type {HTMLElement|null} The main element being watched */
 		this.mainElement = options.element || null;
 		/** @type {scopeController} The scope controller instance */
-		this.scopeCtrl = new scopeController(scope,null,null,false,this);
+		this.scopeCtrl = new scopeController(this.scope,null,null,false,this);
 		/** @type {eventRegistry} Event Registry */
 		this.eventRegistry = this.scopeCtrl.eventRegistry;
 		/** @type {Map} Named controllers map */
@@ -377,7 +378,7 @@ class ScopeDom {
 		this.domWaitForMain.observe(document.head.parentNode,{ __proto__:null, subtree:false, childList:true, attributes:false });
 	}
 	
-	#domWaitForMainElement(m){
+	#domWaitForMainElement(muts){
 		if(document.body) this.#domOnMainElement();
 	}
 	
@@ -422,7 +423,14 @@ class ScopeDom {
 		if(name===null){
 			let scope = this.scopeCtrl.scope, { globalContext, signalProxyAll } = this.options;
 			let setScopes=new Set(); for(let s=scope; s && s!==Object; s=mtCacheGetPrototypeOf(s)) setScopes.add(s); 
-			let proxy = new execExpressionProxy({ __proto__:null, scopeCtrl:this.scopeCtrl, mainScopes:[scope], getScopes:new Set([this.scopeCtrl.execContext,scope]), setScopes, silentHas:false, globalsHide:!globalContext, useSignalProxy:!!signalProxyAll });
+			let proxy = new execExpressionProxy({ __proto__:null,
+				mainScopes: [scope], getScopes: new Set([this.scopeCtrl.execContext,scope]), setScopes,
+				scopeUseOwn: null, silentHas: false,
+				globalObj: window, globalsHide: !globalContext, globalCatch: execExpression.throwGlobalAccessError,
+				scopeCtrl: this.scopeCtrl,
+				useSignalProxy: !!signalProxyAll, returnSignals: false,
+				unscopables: null,
+			});
 			this.handleScopeCtrlFn(proxy,fn);
 		}
 		return this;
@@ -491,8 +499,10 @@ class ScopeDom {
 	}
 	
 	#domState = 0;
+	
 	#boundOnDOMReadyStateChange = this.#onDOMReadyStateChange.bind(this);
-	#onDOMReadyStateChange(){
+	
+	#onDOMReadyStateChange(evt){
 		switch(document.readyState){
 			case 'interactive':
 				this.#domState = 1;
@@ -1063,14 +1073,15 @@ class ScopeDom {
 	 */
 	ensureExpressionSignal(element,key){
 		let elementScopeCtrl = this.elementScopeCtrl(element);
-		let { runFn:expFn } = this.elementExecExp(elementScopeCtrl,`${key}`,null,{ __proto__:null, run:false, useReturn:true, useSignalProxy:true });
+		let { runFn:expFn, options } = this.elementExecExp(elementScopeCtrl,`${key}`,null,{ __proto__:null, run:false, useReturn:true, useSignalProxy:true, returnSignals:true });
 		let signal = resolveSignal(expFn(),null,true);
 		if(!signal){
 			signal = this.scopeCtrl.signalCtrl.createSignal();
-			let { runFn } = this.elementExecExp(elementScopeCtrl,`${key}=$$signal`,null,{ __proto__:null, run:false, useReturn:true, useSignalProxy:true, argument:'$$signal' });
+			let { runFn } = this.elementExecExp(elementScopeCtrl,`${key}=$$signal`,null,{ __proto__:null, run:false, useReturn:true, useSignalProxy:true, returnSignals:true, argument:'$$signal' });
 			let result = runFn(signal);
 			if(result!==signal) signal = null;
 		}
+		signal.record();
 		return { signal, expFn };
 	}
 	

@@ -175,6 +175,11 @@ export class signalObserver {
 		return result;
 	}
 	
+	recordingScope(){
+		this.startRecording();
+		return { [disposeSymbol]: this.stopRecording.bind(this) };
+	}
+	
 	/**
 	 * Adds a listener callback to the observer.
 	 * 

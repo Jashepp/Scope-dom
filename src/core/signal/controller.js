@@ -179,6 +179,14 @@ export class signalController {
 		return result;
 	}
 	
+	isolatedRecordingScope(){
+		let prev = Array.from(this.#observersRecording);
+		this.#observersRecording.length = 0;
+		return { [disposeSymbol]:()=>{
+			for(let observer of prev) this.#observersRecording.push(observer);
+		} };
+	}
+	
 	/**
 	 * Prevents signals from triggering updates to observers during function execution.
 	 * 
@@ -200,6 +208,13 @@ export class signalController {
 		return result;
 	}
 	
+	preventUpdatesScope(){
+		this.#preventUpdates = true;
+		return { [disposeSymbol]:()=>{
+			this.#preventUpdates = false;
+		} };
+	}
+	
 	/**
 	 * Prevents observers from recording signals during function execution.
 	 * 
@@ -219,6 +234,13 @@ export class signalController {
 		this.#preventObservers = false;
 		if(error) throw error;
 		return result;
+	}
+	
+	preventObserversScope(){
+		this.#preventObservers = true;
+		return { [disposeSymbol]:()=>{
+			this.#preventObservers = false;
+		} };
 	}
 	
 	// Signal Helper Methods

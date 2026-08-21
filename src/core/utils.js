@@ -62,9 +62,11 @@ export function setAttribute(target,name,value){ // Set attribute with less name
 
 
 export class eventRegistry {
+	
 	constructor(){
 		this.map = new Map();
 	}
+
 	add(target,name,listener,options={}){
 		let targetMap = this.map;
 		if(!targetMap.has(target)) targetMap.set(target,new Map());
@@ -76,6 +78,7 @@ export class eventRegistry {
 		optionsSet.add(options);
 		target.addEventListener(name,listener,options);
 	}
+
 	remove(target,name=null,listener=null,options=null){
 		if(!this.map.has(target)) return;
 		let nameMap = this.map.get(target);
@@ -102,10 +105,12 @@ export class eventRegistry {
 		}
 		if(nameMap.size===0) this.map.delete(target);
 	}
+
 }
 
 
 let mtCacheWM = new WeakMap(), mtDeferring = false, mtDeferAgain = false;
+
 export class microtaskCache {
 	
 	static get(wmKey,key){

@@ -297,7 +297,7 @@ export class signalInstance {
 	 * 
 	 * @returns {string} The signal's value as a string, or undefined if value.toString doesn't exist
 	 */
-	get toString(){ let v=this.get(); return v?.toString?.bind(v); }
+	// get toString(){ let v=this.get(); return v?.toString?.bind(v); }
 	
 	/**
 	 * Returns the signal's value as a locale-specific string.
@@ -306,7 +306,7 @@ export class signalInstance {
 	 * 
 	 * @returns {string} signal's value as a locale-specific string, or undefined if value.toLocaleString doesn't exist
 	 */
-	get toLocaleString(){ let v=this.get(); return v?.toLocaleString?.bind(v); }
+	// get toLocaleString(){ let v=this.get(); return v?.toLocaleString?.bind(v); }
 	
 	/**
 	 * Returns the signal's value as JSON.
@@ -315,7 +315,7 @@ export class signalInstance {
 	 * 
 	 * @returns {any} The signal's value as JSON, or undefined if value.toJSON doesn't exist
 	 */
-	get toJSON(){ let v=this.get(); return v?.toJSON?.bind(v); }
+	// get toJSON(){ let v=this.get(); return v?.toJSON?.bind(v); }
 	
 	/**
 	 * Returns the signal's value as a primitive.
@@ -324,7 +324,7 @@ export class signalInstance {
 	 * 
 	 * @returns {any} The signal's value as a primitive, or the raw value itself if value.valueOf doesn't exist
 	 */
-	valueOf(){ let v=this.get(); return v?.valueOf?v?.valueOf?.():v; }
+	// valueOf(){ let v=this.get(); return v?.valueOf?v?.valueOf?.():v; }
 	
 	/**
 	 * Allows the signal to be used with the Promise method .then().
@@ -344,7 +344,7 @@ export class signalInstance {
 	 * 
 	 * @returns {string} The value's Symbol.toStringTag, otherwise returns "ScopeDom.signalInstance"
 	 */
-	get [Symbol.toStringTag](){ return this.get()?.[Symbol.toStringTag] || "ScopeDom.signalInstance"; }
+	// get [Symbol.toStringTag](){ return this.get()?.[Symbol.toStringTag] || "ScopeDom.signalInstance"; }
 	
 	/**
 	 * Returns an iterator for the signal's value.
@@ -353,7 +353,7 @@ export class signalInstance {
 	 * 
 	 * @returns {Iterator} An iterator for the signal's value, or undefined if value[Symbol.iterator] doesn't exist
 	 */
-	[Symbol.iterator](){ return Iterator.from ? Iterator.from(this.get()) : this.get()?.[Symbol.iterator]?.(); }
+	// [Symbol.iterator](){ return Iterator.from ? Iterator.from(this.get()) : this.get()?.[Symbol.iterator]?.(); }
 	
 	/**
 	 * Converts the signal's value to a primitive type.

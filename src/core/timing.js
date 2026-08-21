@@ -4,15 +4,32 @@ import {
 } from "./utils.js";
 
 // Defer / Queue Task Variables
-let deferList = new Set(), isDeferQueued = false;
+/** @type {boolean} Whether defer/microtask queue is currently scheduled */
+let isDeferQueued = false;
+/** @type {Set<Function>} Tasks queued for defer/microtask execution */
+let deferList = new Set();
 
 // Queue Compute Variables
-let computeList = new Set(), isComputeQueued = false, deferCompute = false;
+/** @type {boolean} Whether compute queue is currently scheduled */
+let isComputeQueued = false;
+/** @type {boolean} Whether the next compute queue run should defer through the microtask layer */
+let deferCompute = false;
+/** @type {Set<Function>} Compute functions queued for after-RAF execution */
+let computeList = new Set();
 
 // Queue Render Animation Variables
-let rafList=new Set(), rafOnceList=new Map(), isDuringRAF=false, isRAFScheduled=false;
+/** @type {boolean} Whether currently inside an animation frame (DOM writes only allowed here) */
+let isDuringRAF = false;
+/** @type {boolean} Whether a requestAnimationFrame callback has been scheduled */
+let isRAFScheduled = false;
+/** @type {Set<Function>} Batched RAF callbacks */
+let rafList = new Set();
+/** @type {Map<any,Map<any,Function>>} Once-animation callbacks keyed by obj+key */
+let rafOnceList = new Map();
 
 /**
+ * Timing - batching, queuing, and animation frame utilities for DOM updates.
+ * 
  * @class timing
  */
 export class timing {
@@ -95,7 +112,9 @@ export class timing {
 	// - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 	
 	static get isDuringRAF(){ return isDuringRAF; };
+	
 	static get isRAFScheduled(){ return isRAFScheduled; };
+	
 	static promiseToRAF(p,fn,fnErr){
 		return p.then((r)=>timing.requestAnimation(()=>fn(r)),(err)=>timing.requestAnimation(fnErr?fnErr:()=>console.error(err)));
 	}
@@ -128,8 +147,8 @@ export class timing {
 		if(useLast && hasFn) list.set(key,fn);
 		else if(!hasFn) list.set(key,fn);
 		if(!isRAFScheduled) isRAFScheduled = requestAnimationFrame(timing.#scheduledRAF),true;
-		return !hasFn; // True if fresh (last cb)
-	};
+		return !hasFn;
+	}
 	
 	static #scheduledRAF(){
 		isDuringRAF = true;

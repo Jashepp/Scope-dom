@@ -36,6 +36,7 @@ export class scopeExpression {
 		let instance = eCtrl.ctrl.ScopeDomInstance;
 		options = { __proto__:null, ...options, scopeCtrl:eCtrl.ctrl };
 		if(!hasOwn(options,'useSignalProxy')) options.useSignalProxy = !!instance.options.signalProxyAll;
+		if(!hasOwn(options,'returnSignals')) options.returnSignals = !!execExpOptionsDefaults.returnSignals;
 		if(!hasOwn(options,'run')) options.run = execExpOptionsDefaults.run;
 		// Scopes state/object
 		let scopes = {

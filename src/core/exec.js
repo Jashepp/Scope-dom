@@ -207,7 +207,7 @@ export class execExpression {
 		useAsync = options.useAsync = useAsync || expression.indexOf('await')!==-1;
 		let globalObj = window, globalCatch = noopFn, unscopables = execExpProxyDefaults.unscopables, args = execExpression.#expDefaultArguments;
 		// If both globalsHide and throwGlobals are true, throw on global access
-		if(globalsHide && throwGlobals) globalCatch = execExpression.#throwGlobalAccessError;
+		if(globalsHide && throwGlobals) globalCatch = execExpression.throwGlobalAccessError;
 		// If argument is provided, add it to unscopables
 		if(argument?.length>0){ unscopables = { __proto__:null, [argument]:true }; args = args.concat(argument); }
 		// Turn mainScopes & extraScopes into getScopes & setScopes
@@ -241,12 +241,12 @@ export class execExpression {
 		return { __proto__:null, result:null, firstScope:getScopes.values().next().value, runFn, logFnError, getScopes, setScopes, proxy, options };
 	}
 	
-	static #throwGlobalAccessError(key){
+	static throwGlobalAccessError(key){
 		throw new Error("Expression tried to access a global variable: "+key);
 	}
 	
 	static #logExpError(expression,genFn,proxyObj,error){
-		console.warn(`ScopeDom: Error on Expression: ${expression}\n`,error.message,'\n',{ expression, error, genFn,proxyObj });
+		console.warn(`ScopeDom: Error on Expression: ${expression}\n`,error?.message,'\n',{ expression, error, genFn, proxyObj });
 	}
 	
 	/**
