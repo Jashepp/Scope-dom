@@ -529,7 +529,7 @@ export class signalController {
 	
 	/**
 	 * Creates a deep reactive proxy for objects with automatic signal tracking.
-	 *
+	 * 
 	 * A signalProxy creates a proxy that automatically creates signalInstance and
 	 * signalProxy for every property accessed, enabling infinitely deep reactivity.
 	 * Each nested property becomes a signal that can be tracked and updated independently.
@@ -638,7 +638,7 @@ export class signalController {
 	 * @param {boolean} [strict=false] Strict mode: throw if value is not a signal
 	 * @returns {any} The resolved raw value (unwrapped from signalProxy/signalInstance)
 	 */
-	resolveSignal(value,signalObs,strict){
+	resolveSignal(value,signalObs=null,strict=false){
 		return resolveSignal(value,signalObs,strict);
 	}
 	

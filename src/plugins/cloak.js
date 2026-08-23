@@ -2,7 +2,7 @@
 /** @typedef {import('../scopedom.js').default} ScopeDom */
 
 /** @type {HTMLStyleElement} Pre-injected CSS for hiding elements with $cloak attribute. */
-let styleReady = document.createElement('style');
+export const styleReady = document.createElement('style');
 styleReady.setAttribute('type','text/css');
 styleReady.appendChild(document.createTextNode(`*[\\$cloak], *[\\$cloak\\:dom] { display:none !important; }`));
 document.head.prepend(styleReady);
@@ -95,7 +95,7 @@ export class pluginCloak {
 		 * @property {Function} ready instance.isReady()
 		 */
 		state.scope = {
-			$element:element, $anchor:null,
+			$element: element, $anchor: null,
 			plugins: this.#hasPlugins.bind(this),
 			loaded: instance.isElementLoaded.bind(instance,element,false,false),
 			ready: instance.isReady.bind(instance),

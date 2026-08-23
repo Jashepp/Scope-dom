@@ -49,6 +49,7 @@ export class pluginCloakSimple {
 	
 	/** @returns {string} The name of the plugin. */
 	get name(){ return 'cloak'; }
+	static get name(){ return 'cloak'; }
 	
 	/**
 	 * Plugin constructor.

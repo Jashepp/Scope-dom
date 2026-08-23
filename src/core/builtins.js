@@ -368,7 +368,7 @@ export class builtinAttributes {
 		let { attribute:$attribute } = attrib;
 		let defaultClasses = element.getAttribute('class') ?? '';
 		element[this.#attrClassDefaultSymbol] = defaultClasses;
-		element[this.#attrClassAbortSymbol] = { abort:false };
+		element[this.#attrClassAbortSymbol] = { __proto__:null, abort:false };
 		let { runFn } = instance.elementExecExp(elementScopeCtrl,value,{ __proto__:null, $attribute, $original:defaultClasses },{ __proto__:null, run:false, useReturn:true });
 		let obs = instance.scopeCtrl.signalCtrl.createObserver();
 		runFn = obs.wrapRecorder(runFn);

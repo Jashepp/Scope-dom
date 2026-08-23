@@ -150,7 +150,7 @@ export class scopeControllerContext {
 	 * 
 	 * @param {string} [suffix=''] Optional suffix for custom update events
 	 */
-	$update(suffix=''){ return this[scSymb].$emitScopeUpdate(suffix); };
+	$update(suffix=''){ this[scSymb].$emitScopeUpdate(suffix); };
 	
 	/**
 	 * Remove an event listener from scope event registry.
