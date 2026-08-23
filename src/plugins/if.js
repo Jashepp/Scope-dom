@@ -1,33 +1,42 @@
 "use strict";
+/** @typedef {import('../scopedom.js').default} ScopeDom */
 
 /** @type {number} Text node type constant from `document.TEXT_NODE`. */
 const textNodeType = document.TEXT_NODE;
 
-/** Symbol key used to signal that a Promise result is waiting for case-match evaluation */
+/** @type {symbol} Symbol key used to signal that a Promise result is waiting for case-match evaluation */
 const matchCasePromiseWaitSymbol = Symbol('pluginIf-matchCase-promise-wait');
 
-/** Symbol key used to store the resolved promise value in case-match results */
+/** @type {symbol} Symbol key used to store the resolved promise value in case-match results */
 const matchCasePromiseResultSymbol = Symbol('pluginIf-matchCase-promise-result');
 
-/** Symbol key identifying special operator functions (OR/AND/NOT) within `matchCaseScope` */
+/** @type {symbol} Symbol key identifying special operator functions (OR/AND/NOT) within `matchCaseScope` */
 const matchCaseOperatorSymbol = Symbol('pluginIf-matchCaseScope-operator');
 
 /**
  * Factory function that creates a callable function with an attached operator symbol.
  * Used by {@link matchCaseScope} to produce OR/AND/NOT operators for case matching.
- * @param {string} op - The operator name ('or', 'and', or 'not')
- * @param {Array} arr - The array of values to operate on
+ * 
+ * @param {string} op The operator name ('or', 'and', or 'not')
+ * @param {Array} arr The array of values to operate on
+ * @returns {Function} A zero-arg function whose result array is checked element-by-element
+ *   by the matching engine. The function object itself carries the operator symbol
+ *   as `fn[matchCaseOperatorSymbol]`.
  */
 const matchCaseOperatorFn = (op,arr)=>{
 	let fn=_=>arr; fn[matchCaseOperatorSymbol]=op; return fn;
 };
 
-/**
- * Pre-frozen object providing special operator functions for case matching:
- * - `_()` — always returns true
- * - `_or(...values)` — returns true if any value matches
- * - `_and(...values)` — returns true only if all values match
- * - `_not(...values)` — returns true if no values match
+/** 
+ *  Accessed via `$if-match`/`$if-case` expressions like `{ foo: _or('a','b','c') }` or
+ *  `{ inputText: [_,/^b.r$/] }` for index-by-index array matching.
+ * 
+ *  - `_()` - always returns `true` (placeholder for array slots)
+ *  - `_or(...values)` - matched if any value matches
+ *  - `_and(...values)` - matched if all values match
+ *  - `_not(value)` - matched if the value does NOT match
+ * 
+ * @type {object} Pre-frozen object providing special operator functions for case matching.
  */
 const matchCaseScope = Object.freeze({
 	_(v){ return true; },
@@ -36,7 +45,12 @@ const matchCaseScope = Object.freeze({
 	_not(...arr){ return matchCaseOperatorFn('not',arr); },
 });
 
-let timing, resolveSignal, setAttribute;
+/** @type {any} Shared scopeDom.timing reference for RAF/batching */
+let timing;
+/** @type {any} Shared scopeDom.resolveSignal reference */
+let resolveSignal;
+/** @type {any} Shared scopeDom.setAttribute reference */
+let setAttribute;
 
 /**
  * Plugin for conditional rendering based on expression evaluation.
@@ -48,6 +62,24 @@ let timing, resolveSignal, setAttribute;
  * - CSS style-based hiding (using `display: none !important`)
  * - Template parsing with start/end anchor nodes
  * 
+ * The `$if` attribute and its variants, with shared options:
+ *   $if                conditional expression - show/hide the element
+ *   $if-else           else variant - empty value falls back to the implicit expression
+ *   $if-match          match-case pattern used to evaluate `$if-case`
+ *   $if-case           case value compared against the `$if`/`$if-match` result
+ * 
+ * Shared `:option` suffixes (any variant):
+ *   $if:once           evaluate at most once per element lifetime
+ *   $if:dom            DOM remove/replace via anchor comment (or `$if:dom='exp'`)
+ *   $if:update-scope   re-evaluate when the scope emits the given event
+ *   $if:update-dom     re-evaluate when the DOM emits the given event
+ *   $if:on-show        expression run when the element becomes shown
+ *   $if:on-hide        expression run when the element becomes hidden
+ *   $if:default        fallback value while a Promise is pending
+ * 
+ * Variant chain: `$if` -> `$if-else` -> `$if-case`. An empty `else`/`case` takes the implicit expression;
+ * its showing result propagates `false` down the chain of sibling elements with `else`/`case`.
+ * 
  * @class pluginIf
  */
 export class pluginIf {
@@ -58,18 +90,27 @@ export class pluginIf {
 	get name(){ return 'if'; }
 	static get name(){ return 'if'; }
 	
-	#eventMap; #stateMap;
+	/** @type {ScopeDom} ScopeDom class */
+	ScopeDom;
+	/** @type {ScopeDom} ScopeDom instance */
+	instance;
+	/** @type {WeakMap<HTMLElement, Set<Function>>} Per-element event removal callbacks */
+	#eventMap;
+	/** @type {WeakMap<HTMLElement, object>} Per-element internal state */
+	#stateMap;
 	
 	/**
-	 * @param {Object} ScopeDom - The ScopeDom class
-	 * @param {Object} instance - The ScopeDom instance
+	 * Initializes the pluginIf instance, captures shared references, and sets up per-element tracking maps.
+	 * 
+	 * @param {object} ScopeDom The ScopeDom class reference
+	 * @param {object} instance The ScopeDom instance
 	 */
 	constructor(ScopeDom,instance){
 		this.ScopeDom = ScopeDom;
 		this.instance = instance;
-		this.isElementLoaded = instance.isElementLoaded.bind(instance);;
-		this.#eventMap = new WeakMap(); // element, set (removeEvent cb)
-		this.#stateMap = new WeakMap(); // element, state
+		this.isElementLoaded = instance.isElementLoaded.bind(instance);
+		this.#eventMap = new WeakMap();
+		this.#stateMap = new WeakMap();
 		timing = ScopeDom.timing;
 		resolveSignal = ScopeDom.resolveSignal;
 		setAttribute = ScopeDom.setAttribute;
@@ -82,9 +123,9 @@ export class pluginIf {
 	 * For template elements that are not yet loaded, defers connection until they become available.
 	 * Also handles moving `repeat` attributes from templates to their inner content.
 	 * 
-	 * @param {Object} plugInfo - Information about the plugin connection
-	 * @param {HTMLElement} plugInfo.element - The element being connected (may be a template)
-	 * @param {Map<string, Object>} plugInfo.attribs - Parsed ScopeDom attributes of the element
+	 * @param {Object} plugInfo Information about the plugin connection
+	 * @param {HTMLElement} plugInfo.element The element being connected (may be a template)
+	 * @param {Map<string, Object>} plugInfo.attribs Parsed ScopeDom attributes of the element
 	 */
 	onConnect(plugInfo){
 		let { instance, isElementLoaded } = this;
@@ -111,10 +152,10 @@ export class pluginIf {
 	 * internal structure so that repeat logic applies to nested templates rather
 	 * than the outer template itself.
 	 * 
-	 * @param {Object} plugInfo - Contains `element` (template) and `attribs`
-	 * @param {Object} targetAttrib - Parsed ScopeDom repeat attribute of the element
-	 * @param {string} fallbackAttribName - Fallback attrib name key, e.g. `'default repeat'`
 	 * @private
+	 * @param {Object} plugInfo Contains `element` (template) and `attribs`
+	 * @param {Object} targetAttrib Parsed ScopeDom repeat attribute of the element
+	 * @param {string} fallbackAttribName Fallback attrib name key, eg: `'default repeat'`
 	 */
 	#moveAttrib(plugInfo,targetAttrib,fallbackAttribName){
 		let { element, attribs } = plugInfo;
@@ -151,10 +192,10 @@ export class pluginIf {
 	 * Handles different scenarios for regular elements vs template anchors, including
 	 * partial cleanup (fake disconnect) where some restoration is skipped.
 	 * 
-	 * @param {Object} plugInfo - Contains `element`, `elementScopeCtrl` and `attribs`
-	 * @param {HTMLElement} plugInfo.element - The element being disconnected
-	 * @param {Map<string, Object>} plugInfo.attribs - Parsed ScopeDom attributes of the element
-	 * @param {boolean} [fakeDC=false] - If true, indicates a "fake" disconnect where some restoration (e.g., style.display) is skipped
+	 * @param {Object} plugInfo Contains `element`, `elementScopeCtrl` and `attribs`
+	 * @param {HTMLElement} plugInfo.element The element being disconnected
+	 * @param {Map<string, Object>} plugInfo.attribs Parsed ScopeDom attributes of the element
+	 * @param {boolean} [fakeDC=false] If true, indicates a "fake" disconnect where some restoration (eg, style.display) is skipped
 	 */
 	onDisconnect(plugInfo,fakeDC=false){
 		let { element, elementScopeCtrl, attribs } = plugInfo;
@@ -231,10 +272,10 @@ export class pluginIf {
 	 * 1. Extracts expression values from `if`, `if else`, `if match`, and `if case` attributes.
 	 * 2. Parses options like `onlyOnce`, `dom`, `update scope`, `update dom`, `on show`, `on hide`, and `default`.
 	 * 3. Creates a state object containing signal controllers, anchor references, and execution functions.
-	 *
-	 * @param {Object} plugInfo - Contains `element` and `elementScopeCtrl`
-	 * @param {Map<string, Object>} ifAttributes - Parsed ScopeDom if attributes of the element
+	 * 
 	 * @private
+	 * @param {Object} plugInfo Contains `element` and `elementScopeCtrl`
+	 * @param {Map<string, Object>} ifAttributes Parsed ScopeDom if attributes of the element
 	 */
 	#configureIf(plugInfo,ifAttributes){
 		let { instance } = this;
@@ -244,7 +285,8 @@ export class pluginIf {
 		if(this.#stateMap.has(element)) return;
 		// Skip empty template
 		if(isTemplate && !(element.content?.childNodes?.length>0)) return console.warn("pluginIf: template has no content",element);
-		// Value / Expression
+		// Extract expression values from if/if-else/if-match/if-case attributes
+		// Priority: if > if else > if case (first non-empty value wins)
 		let expression = null, expressionAttrib = null;
 		for(let [nameKey,attrib] of ifAttributes){
 			if(nameKey==='if' || nameKey==='if else' || nameKey==='if case'){
@@ -252,6 +294,8 @@ export class pluginIf {
 				if(expressionAttrib===null) expressionAttrib = attrib;
 			}
 		}
+		// For empty-expression if-else/if-case slots (eg, `$if-else` with no value),
+		// fall back to the attribute options (once/dom defaults) as the implicit expression
 		for(let [nameKey,attrib] of ifAttributes){
 			if(nameKey==='if' || nameKey==='if else' || nameKey==='if case'){
 				if(expression===null && !(attrib.value?.length>0)){
@@ -263,7 +307,8 @@ export class pluginIf {
 				attrib.value = instance.elementAttribFallbackOptionValue(attrib,['once']);
 			}
 		}
-		// Options
+		// Parse options for each attribute
+		// $if-match options are collected separately in matchOpts (eg, $if-match:once)
 		let attribOpts = new Map(), matchOpts = new Map();
 		for(let [nameKey,attrib] of ifAttributes){
 			if(nameKey==='if' || nameKey==='if else' || nameKey==='if case'){
@@ -315,10 +360,10 @@ export class pluginIf {
 	
 	/**
 	 * Registers an event removal function for an element.
-	 *
-	 * @param {HTMLElement} element - The element to track
-	 * @param {Function} removeEvent - The function to remove the event listener
+	 * 
 	 * @private
+	 * @param {HTMLElement} element The element to track
+	 * @param {Function} removeEvent The function to remove the event listener
 	 */
 	#registerEventRemoval(element,removeEvent){
 		if(!this.#eventMap.has(element)) this.#eventMap.set(element,new Set());
@@ -328,10 +373,10 @@ export class pluginIf {
 	/**
 	 * Checks if the expression has already executed at least once for this state,
 	 * which is used by the `onlyOnce` option to prevent re-execution.
-	 *
-	 * @param {Object} state - The current if state object.
-	 * @returns {boolean} True if the expression has been executed at least once; false otherwise.
+	 * 
 	 * @private
+	 * @param {Object} state The current if state object.
+	 * @returns {boolean} True if the expression has been executed at least once; false otherwise.
 	 */
 	#hasExecutedOnce(state){
 		let { exec, anchor, defaultDisplay, options:{ onlyOnce, domRemove } } = state;
@@ -341,14 +386,14 @@ export class pluginIf {
 	/**
 	 * Executes an expression in the context of a node.
 	 * Creates a signal observer and wraps the run function for signal tracking.
-	 *
-	 * @param {HTMLElement} element - The root element for the expression context
-	 * @param {string} expression - The expression to execute
-	 * @param {boolean} useReturn - Return a value from `runFn()`
-	 * @param {Object|null} extraProps - Extra properties spread into the exec object
-	 * @param {Object} signalObs - The signal observer to wrap the run function
-	 * @returns {Object} The execution result
+	 * 
 	 * @private
+	 * @param {HTMLElement} element The root element for the expression context
+	 * @param {string} expression The expression to execute
+	 * @param {boolean} useReturn Return a value from `runFn()`
+	 * @param {Object|null} extraProps Extra properties spread into the exec object
+	 * @param {Object} signalObs The signal observer to wrap the run function
+	 * @returns {Object} The execution result
 	 */
 	#executeExpression(element,expression,useReturn=true,extraProps=null,signalObs){
 		let eCtrl = this.instance.elementScopeCtrl(element);
@@ -366,13 +411,13 @@ export class pluginIf {
 	 * 3. Prepares "on show" / "on hide" callback executors.
 	 * 4. Executes the main expression and delegates to `#handleResult()`.
 	 * 
-	 * @param {Object} plugInfo - Contains `element`, `elementScopeCtrl`, and `attribs`
-	 * @param {Object} attrib - The attribute descriptor for this element (used in result handling)
-	 * @param {Object} state - Current conditional rendering state
-	 * @param {string|null} expression - Expression string to evaluate, or null if none was provided
-	 * @param {boolean} performMatch - Perform match-case evaluation logic (default: true)
-	 * @param {boolean} updateDependents - Propagate updates to dependent sibling elements (default: false)
 	 * @private
+	 * @param {Object} plugInfo Contains `element`, `elementScopeCtrl`, and `attribs`
+	 * @param {Object} attrib The attribute descriptor for this element (used in result handling)
+	 * @param {Object} state Current conditional rendering state
+	 * @param {string|null} expression Expression string to evaluate, or null if none was provided
+	 * @param {boolean} performMatch Perform match-case evaluation logic (default: true)
+	 * @param {boolean} updateDependents Propagate updates to dependent sibling elements (default: false)
 	 */
 	#runIfExpressions(plugInfo,attrib,state,expression,performMatch=true,updateDependents=false){
 		let { instance, isElementLoaded } = this;
@@ -439,37 +484,43 @@ export class pluginIf {
 	 * 3. Promise-based expressions use a default value until resolved, then re-triggers `#handleResult`.
 	 * 4. Delegation to `#handleTemplateIfResult()` or `#handleRegularIfResult()` based on template mode.
 	 * 
-	 * @param {Object} plugInfo - Contains element and scope control info
-	 * @param {Object} attrib - Attribute descriptor for this element (used in result handling)
-	 * @param {Object} state - Current conditional rendering state
-	 * @param {string|null} expression - Expression string to evaluate, or null if none was provided
-	 * @param {number} updateIndex - The current update index; older results are ignored if a newer one exists
-	 * @param {boolean} performMatch - Match-case evaluation logic should be performed (default: true)
-	 * @param {boolean} updateDependents - Dependent sibling elements should also receive updates (default: false)
-	 * @param {any} result - The evaluated expression result to process
 	 * @private
+	 * @param {Object} plugInfo Contains element and scope control info
+	 * @param {Object} attrib Attribute descriptor for this element (used in result handling)
+	 * @param {Object} state Current conditional rendering state
+	 * @param {string|null} expression Expression string to evaluate, or null if none was provided
+	 * @param {number} updateIndex The current update index; older results are ignored if a newer one exists
+	 * @param {boolean} performMatch Match-case evaluation logic should be performed (default: true)
+	 * @param {boolean} updateDependents Dependent sibling elements should also receive updates (default: false)
+	 * @param {any} result The evaluated expression result to process
 	 */
 	#handleResult(plugInfo,attrib,state,expression,updateIndex,performMatch,updateDependents,result){
 		let { signalObs, ifAttributeValue, ifElseAttributeValue, ifMatchAttributeValue, ifCaseAttributeValue, isTemplate, execMatch, options:{ matchOnce, defaultValue } } = state;
-		// Ignore old results
+		// Ignore old results: skip if a newer result already superseded this one
 		if(state.updateIndex>updateIndex) return;
-		// Resolve Signal
+		// Resolve Signal: unwrap a signalInstance to its current value before further processing
 		result = resolveSignal(result,signalObs);
-		// If result is promise, use default & handleResult when settled
+		// If result is a Promise, defer to default value & re-trigger when settled.
+		// The default value (eg, "$if:default='WAIT'") controls UI state during the wait.
 		if(result instanceof Promise){
 			// Fallback / Default Value
 			this.#handleResult(plugInfo,attrib,state,expression,updateIndex,performMatch,false,defaultValue);
 			updateIndex = state.updateIndex;
-			// Handle Result
+			// Handle Result: deferred re-execution via RAF when Promise settles
 			timing.promiseToRAF(result,this.#handleResult.bind(this,plugInfo,attrib,state,expression,updateIndex,false,true));
 			return;
 		}
-		// If the match result is a promise that contains a resolved value, ensure updates are propagated to other dependent elements
+		// If the match result is a promise that contains a resolved value (via matchCasePromiseResultSymbol),
+		// ensure updates are propagated to other dependent elements
 		if(!updateDependents && execMatch?.result instanceof Promise && Object.hasOwn(execMatch.result,matchCasePromiseResultSymbol)) updateDependents = true;
-		// if updateDependents, check depList
+		// When updates should propagate (updateDependents=true), walk the sibling chain:
+		// Any sibling that's currently showing causes this result to become false.
 		if(updateDependents && state.depList) for(let eState of state.depList) if(eState.showing){ result=false; ifElseAttributeValue=false; ifCaseAttributeValue=false; break; }
-		// Handle if-match & if-case
+		// Handle $if-match & $if-case: when the case value matches the expression string,
+		// evaluate the match expression and compare against the case value.
 		if(ifCaseAttributeValue?.length>0 && ifCaseAttributeValue===expression){
+			// Find execMatch from dependency chain: walk depList (sibling chain) looking for
+			// any previously-created execMatch from $if-match elements. First non-null match wins.
 			let ifMatch = null, matchElement = state.element, matchResult = null, matchOpts = new Map();
 			if(!execMatch && state.depList) for(let eState of [state,...state.depList]){
 				if(!execMatch && eState.execMatch) execMatch = state.execMatch = eState.execMatch;
@@ -479,28 +530,34 @@ export class pluginIf {
 					if(state.matchOpts.size>0) matchOpts = new Map([...matchOpts,...state.matchOpts]);
 				}
 			}
-			let matchOnce = this.instance.elementAttribParseOption(matchElement,matchOpts,'once',{ default:false, emptyTrue:true, runExp:true }).value; // $if-match:once
+			// $if-match:once option - skip re-evaluation after first run
+			let matchOnce = this.instance.elementAttribParseOption(matchElement,matchOpts,'once',{ default:false, emptyTrue:true, runExp:true }).value;
 			let firstRun = false;
 			if(!execMatch){
 				firstRun = true;
+				// Default: if no $if-match expression is specified, use 'this' (the current scope)
 				if(ifMatch===null) ifMatch = `this`;
-				// Execute the match expression
-				execMatch = state.execMatch = this.instance.elementExecExp(this.instance.elementScopeCtrl(matchElement),ifMatch,{ __proto__:null, $expression:ifMatch },{ silentHas:true, useReturn:true, run:false, fnThis:null }); // fnThis:null sets 'this' as proxy
+				// Execute the match expression with fnThis=null so 'this' becomes the proxy in expressions.
+				// This is required for $if-match:once promise handling (matchOnce guards re-eval).
+				execMatch = state.execMatch = this.instance.elementExecExp(this.instance.elementScopeCtrl(matchElement),ifMatch,{ __proto__:null, $expression:ifMatch },{ silentHas:true, useReturn:true, run:false, fnThis:null });
 				if(signalObs) execMatch.runFn = signalObs.wrapRecorder(execMatch.runFn);
 			}
 			matchResult = execMatch.result;
-			// Resolve Signal
+			// Resolve Signal: unwrap signalInstance values
 			execMatch.result = resolveSignal(execMatch.result,signalObs);
-			// Resolve Promise
+			// Resolve Promise - check for cached resolved value (Promise fulfilled after deferred handling)
 			if(execMatch.result instanceof Promise && Object.hasOwn(execMatch.result,matchCasePromiseResultSymbol)) matchResult = execMatch.result[matchCasePromiseResultSymbol];
+			// Promise pending: use default value as placeholder until resolved
 			if(execMatch.result instanceof Promise && execMatch.result?.[matchCasePromiseWaitSymbol]) matchResult = defaultValue;
-			// Run if needed
+			// Run if needed: first time or re-evaluation (not matchOnce-prefixed)
 			else if(firstRun || (performMatch!==false && !matchOnce)){
-				// console.log({ firstRun, performMatch, matchOnce });
 				matchResult = execMatch.result = execMatch.runFn();
 				// Resolve Signal
 				execMatch.result = resolveSignal(execMatch.result,signalObs);
-				// Resolve Promise
+				// Resolve Promise - branch into three states:
+				// (1) Promise resolved: cached result available via matchCasePromiseResultSymbol
+				// (2) Promise pending: use default value with wait flag set
+				// (3) New Promise: set wait flag, schedule RAF-based re-trigger on fulfillment
 				if(execMatch.result instanceof Promise && Object.hasOwn(execMatch.result,matchCasePromiseResultSymbol)) matchResult = execMatch.result[matchCasePromiseResultSymbol];
 				else if(execMatch.result instanceof Promise && execMatch.result?.[matchCasePromiseWaitSymbol]) matchResult = defaultValue;
 				else if(execMatch.result instanceof Promise){
@@ -513,17 +570,19 @@ export class pluginIf {
 					});
 				}
 			}
-			// Check Match Case
+			// Check $if-case: compare the (resolved) matchResult against the case expression (result value).
+			// matchCase handles: strict equality, RegExp, _or/_and/_not/_ operators, functions, Map, Array, Object.
 			if(result!==false){
 				let obsRecording = signalObs && signalObs.startRecording();
 				result = this.#matchCase(matchResult,result,signalObs);
 				if(obsRecording) signalObs.stopRecording();
 			}
 		}
-		// Continue with result
+		// Continue with result: delegate to template or regular result handler based on element type.
 		if(isTemplate) this.#handleTemplateIfResult(plugInfo,attrib,state,expression,updateIndex,result);
 		else this.#handleRegularIfResult(plugInfo,attrib,state,expression,updateIndex,result);
-		// if updateDependents, update remaining if elements
+		// Propagate updates to dependent siblings: walk next sibling chain updating dependent
+		// $if-else/$if-case elements to false (only if the current result is showing and chain exists).
 		if(updateDependents && !(ifElseAttributeValue===null || ifCaseAttributeValue===null)){
 			let anyShowing = !!state.showing;
 			for(let e=state.element.nextSibling; e; e=e.nextSibling){
@@ -553,24 +612,30 @@ export class pluginIf {
 	 * 
 	 * On error, a warning is logged and `false` is returned.
 	 * 
-	 * @param {any} matchValue - The value to be matched (usually the evaluated expression result)
-	 * @param {any} caseValue - The pattern/object against which `matchObj` is compared
-	 * @returns {boolean} True if successful match occurred; otherwise, returns false
 	 * @private
+	 * @param {any} matchValue The value to be matched (usually the evaluated expression result)
+	 * @param {any} caseValue The pattern/object against which `matchObj` is compared
+	 * @returns {boolean} True if successful match occurred; otherwise, returns false
 	 */
 	#matchCase(matchValue,caseValue){
 		try{
+			//console.log('#matchCase',typeof matchValue,matchValue,typeof caseValue,caseValue);
 			// Resolve Signals
 			matchValue = resolveSignal(matchValue);
 			caseValue = resolveSignal(caseValue);
-			// Equals
+			// Strict equality check (works for primitives & same-object references)
 			if(matchValue===caseValue) return true;
+			// Scalar values (strings, numbers, booleans) are NOT valid match patterns if caught above
 			if(typeof caseValue==='string' || typeof caseValue==='number' || typeof caseValue==='boolean') return false;
+			// Null/undefined/error values cannot match; also reject Promises (deferred results
+			// are handled separately in #handleResult before reaching matchCase).
 			if(caseValue===void 0 || caseValue===null || caseValue instanceof Error) return false;
 			if(matchValue instanceof Promise || caseValue instanceof Promise) return false;
-			// Regex
+			// Regex testing: if the case branch is a RegExp, test the match value string against it
 			if(caseValue instanceof RegExp && typeof matchValue==='string') return caseValue.test(matchValue);
-			// Special Function
+			// Special operator function: _or, _and, _not, _ - applied by matchCaseScope when used as
+			// array slots in index-by-index matching (eg: { inputText: [_,/^b.r$/] }).
+			// The operator symbol is attached by matchCaseOperatorFn.
 			if(caseValue instanceof Function && Object.hasOwn(caseValue,matchCaseOperatorSymbol)){
 				let operator = caseValue[matchCaseOperatorSymbol];
 				let arr = caseValue(matchValue), result = false;
@@ -579,9 +644,14 @@ export class pluginIf {
 				else if(operator==='not'){ result=true; for(let v of arr) if(this.#matchCase(matchValue,v)) return false; }
 				return result;
 			}
-			// Function
+			// Custom function callback: invoke the case value (a Function) with matchValue as arg.
+			// Return value is coerced to boolean via !!.
 			if(caseValue instanceof Function) return !!caseValue(matchValue);
-			// Map
+			// Map / WeakMap matching:
+			// - If matchValue is a Map/WeakMap and caseValue is a plain object, convert object to Map.
+			//   Non-iterable objects (eg: { key1: 'value1' }) become Map via Object.entries → entries.
+			// - If caseValue itself is a Map, iterate: every [[key,value]] pair must exist in matchValue
+			//   (subset match semantics: every case key must be present with matching value).
 			if(matchValue instanceof Map || matchValue instanceof WeakMap){
 				if(!(caseValue instanceof Map) && typeof caseValue==='object' && caseValue!==null){
 					if(Symbol.iterator in caseValue) return false;
@@ -592,7 +662,10 @@ export class pluginIf {
 					return true;
 				}
 			}
-			// Array / Iterable
+			// Array / Iterable index-by-index comparison:
+			// Each index i in caseValue is matched against matchValue[i]. Arrays, Sets, Maps, etc.
+			// are converted via Array.from() if needed. The caseValue.length sets the bound;
+			// matchValue can be shorter (returns false) or longer (ignored).
 			let isMatchArray = matchValue instanceof Array, isMatchIterable = !isMatchArray && (typeof matchValue==='object' && matchValue!==null && Symbol.iterator in matchValue);
 			let isCaseArray = caseValue instanceof Array, isCaseIterable = !isCaseArray && (typeof caseValue==='object' && caseValue!==null && Symbol.iterator in caseValue);
 			if((isMatchArray || isMatchIterable) && (isCaseArray || isCaseIterable)){
@@ -604,7 +677,10 @@ export class pluginIf {
 				}
 				return true;
 			}
-			// Object
+			// Object recursive matching:
+			// For each own key in caseValue, verify the same key exists in matchValue and its value matches recursively.
+			// This implements the "all case properties exist in match, recursively" semantics used by
+			// template <template $if-case="{ foo:0 }"> and <template $if-case="{ inputText:'foo' }">.
 			if(typeof matchValue==='object' && typeof caseValue==='object' && matchValue!==null && caseValue!==null){
 				matchValue = Object(matchValue); caseValue = Object(caseValue);
 				for(let key of Object.keys(caseValue)) if(!Object.hasOwn(matchValue,key) || !this.#matchCase(matchValue[key],caseValue[key])) return false;
@@ -622,13 +698,13 @@ export class pluginIf {
 	 *   When showing, replaces anchor with actual element; when hiding, replaces element with anchor.
 	 * - CSS display style mode: Sets `display: none !important` to hide, or restores original display style to show.
 	 * 
-	 * @param {Object} plugInfo - Contains `element`
-	 * @param {Object} attrib - Attribute descriptor for this element (used in result handling)
-	 * @param {Object} state - Current conditional rendering state
-	 * @param {string|null} expression - Expression string to evaluate, or null if none was provided
-	 * @param {number} callUpdateIndex - The update index at which this handler was called (older calls are ignored)
-	 * @param {boolean} nowShowing - Element should currently be shown (`true`) or hidden (`false`)
 	 * @private
+	 * @param {Object} plugInfo Contains `element`
+	 * @param {Object} attrib Attribute descriptor for this element (used in result handling)
+	 * @param {Object} state Current conditional rendering state
+	 * @param {string|null} expression Expression string to evaluate, or null if none was provided
+	 * @param {number} callUpdateIndex The update index at which this handler was called (older calls are ignored)
+	 * @param {boolean} nowShowing Element should currently be shown (`true`) or hidden (`false`)
 	 */
 	#handleRegularIfResult(plugInfo,attrib,state,expression,callUpdateIndex,nowShowing){
 		let { instance, isElementLoaded } = this;
@@ -702,14 +778,14 @@ export class pluginIf {
 	 * 3. Show/Hide
 	 *    - On hide: saves existing child nodes into `tplNodes` Set, and removes anchors from view.
 	 *    - On show: re-inserts anchors and previously saved/created template content nodes.
-	 *
-	 * @param {Object} plugInfo - The plugInfo object containing `element`
-	 * @param {Object} attrib - Attribute descriptor for this element (used in result handling)
-	 * @param {Object} state - Current conditional rendering state
-	 * @param {string|null} expression - Expression string to evaluate, or null if none was provided
-	 * @param {number} callUpdateIndex - The update index at which this handler was called (older calls are ignored)
-	 * @param {boolean} nowShowing - Template content should currently be shown (`true`) or hidden (`false`)
+	 * 
 	 * @private
+	 * @param {Object} plugInfo The plugInfo object containing `element`
+	 * @param {Object} attrib Attribute descriptor for this element (used in result handling)
+	 * @param {Object} state Current conditional rendering state
+	 * @param {string|null} expression Expression string to evaluate, or null if none was provided
+	 * @param {number} callUpdateIndex The update index at which this handler was called (older calls are ignored)
+	 * @param {boolean} nowShowing Template content should currently be shown (`true`) or hidden (`false`)
 	 */
 	#handleTemplateIfResult(plugInfo,attrib,state,expression,callUpdateIndex,nowShowing){
 		let { instance, isElementLoaded } = this;
@@ -849,5 +925,6 @@ export class pluginIf {
 	
 }
 
+/** Auto-register: prefer ScopeDom.pluginAdd, else fallback to the ScopeDomPlugins discovery object. */
 let win = typeof window!=='undefined' && window;
 if(win) win.ScopeDom?.pluginAdd?.(pluginIf) || ((win.ScopeDomPlugins=win.ScopeDomPlugins||{}).pluginIf=pluginIf);

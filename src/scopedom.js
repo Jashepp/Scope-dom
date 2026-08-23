@@ -26,8 +26,35 @@ import {
 } from "./core/builtins.js";
 
 /**
+ * ScopeDom turns standard HTML attributes into reactive, scoped expressions using
+ * modern web APIs. It is a Reactive DOM Orchestrator, where the DOM is the source of truth.
+ * It operates on these core concepts:
+ * 
+ * Reactive DOM: The real DOM is the source of truth. Attributes like $if, $show, $class,
+ *   $on-click, etc. are parsed and reactively managed - values changed in the DOM, reflect
+ *   in scopes and vice versa.
+ * 
+ * Scope Hierarchy: A tree of scope objects that follow the DOM structure. Each element
+ *   has a scopeElementController, and child scopes shadow parent scopes for variable
+ *   resolution. $scope creates new scopes, $scope-name uses named controllers.
+ * 
+ * Expression Execution: Raw expression strings (like `count + 1`) are compiled into
+ *   JavaScript via Function constructor, wrapped with `with(proxy)` to capture scope
+ *   variables lookups. The proxy resolves variable lookups through the scope hierarchy.
+ * 
+ * Signal Reactive System: Push-pull reactive primitives for property change notification.
+ *   Uses WeakMaps to track subscriptions across scope hierarchies.
+ * 
+ * DOM Mutation Observers: MutationObserver watches for new/removed elements, triggering
+ *   connectElementAndChildren / disconnectElementAndChildren to keep scopes and DOM in sync.
+ * 
+ * Timing: Three concentric timing layers (defer/microtasks, compute queue, render/RAF)
+ *   batch DOM updates efficiently, preventing layout thrashing.
+ */
+
+/**
  * Disables the document.defaultView property to prevent access.
- *
+ * 
  * This function redefines document.defaultView to return a simplified object
  * containing getComputedStyle. It also logs a console warning when accessed.
  */
@@ -41,17 +68,16 @@ const disableDocumentDefaultView = ()=>{
 /**
  * Default initialization options for ScopeDom.
  * 
- * @template {object} initOptionsDefaults
  * @typedef {object} initOptionsDefaults
  */
 const initOptionsDefaults = {
 	/** @type {boolean} Verbose developer logging */
 	dev: false,
-	/** @type {boolean} Regex for parsing attribute names */
+	/** @type {RegExp} Regex for parsing attribute names */
 	attribRegexMatch: /^\$((?:[\.\w\d]+)(?:\-[\.\w\d]+)*?)(?:\:((?:[\.\w\d]+)(?:\-[\.\w\d]+)*?))?$/, // group1: name, group2: option
-	/** @type {boolean} Regex for parsing attribute parts */
+	/** @type {RegExp} Regex for parsing attribute parts */
 	attribRegexParts: /([\.\w\d]+)/g,
-	/** @type {boolean} Ignore attribute name */
+	/** @type {string} String for ignored attribute name */
 	attribIgnore: '$ignore',
 	// attribFormatTest: '$aa-bb-cc', // test these (if they exist), if fail, throw
 	// attribOptionsFormatTest: '$aa-bb-cc:oa-ob',
@@ -63,9 +89,9 @@ const initOptionsDefaults = {
 	documentDefaultView: false,
 	/** @type {scopeBase|object|null} Custom scope object */
 	scope: null,
-	/** @type {boolean} Attribute alias mappings */
+	/** @type {object|null} Attribute alias mappings */
 	attributeAliases: null,
-	/** @type {boolean} Attribute alias name key mappings */
+	/** @type {object|null} Attribute alias name key mappings */
 	attributeAliasNameKeys: null,
 	/** @type {boolean} Auto trigger ready callbacks */
 	autoReady: true,
@@ -86,7 +112,6 @@ DEV: { initOptionsDefaults.dev = true; }
 /**
  * Default values for scope element attributes.
  *
- * @template {object} scopeElementAttribDefaults
  * @typedef {object} scopeElementAttribDefaults
  */
 const scopeElementAttribDefaults = {
@@ -107,7 +132,6 @@ const scopeElementAttribDefaults = {
 /**
  * Default values for scope element attribute options.
  * 
- * @template {object} scopeElementAttribOptionDefaults
  * @typedef {object} scopeElementAttribOptionDefaults
  */
 const scopeElementAttribOptionDefaults = {
@@ -178,19 +202,29 @@ let pluginsPostMain = null;
  */
 
 /**
- * The main ScopeDom class for DOM manipulation and scope management.
+ * Creates and manages reactive scopes tied to DOM nodes, parsing attributes and orchestrating
+ * expression execution, signals, plugins, and batched DOM updates.
  * 
- * Provides DOM scanning, watching, and connection capabilities along with scope controller management.
+ * The ScopeDom class is the entry point for reactive DOM functionality. It does not implement
+ * individual reactive features itself (attributes, signals, expressions) - these are delegated
+ * to core modules. The ScopeDom class coordinates how those features interact by:
+ * - Connecting/disconnecting elements to scope contexts
+ * - Parsing and mapping attributes across the DOM tree
+ * - Managing DOM-ready lifecycle and timing-based updates
+ * - Initializing and exposing plugin system hooks
  * 
  * @class ScopeDom
  */
 class ScopeDom {
 	
 	/**
-	 * Parse script tag attributes.
+	 * (Static) Parse script tag attributes for automatic initialisation.
 	 * 
-	 * data-scopedom-init attribute for automatic initialisation.
-	 * data-scopedom-options attribute for initialisation options.
+	 * Scans the current `<script>` tag for two special attributes:
+	 *   - data-scopedom-init - Triggers auto-initialization of a ScopeDom instance
+	 *   - data-scopedom-options='{"globalContext":false,...}' - Passes JSON-formatted configuration options to override defaults
+	 * 
+	 * A `{ privateInstance:true }` option is prohibited here on the script-tag auto-init path only (a private instance cannot be created  via `data-scopedom-init`); `ScopeDom.init()` itself forwards options to the constructor.
 	 * 
 	 * @static
 	 */
@@ -198,7 +232,7 @@ class ScopeDom {
 		ScopeDom.setupScriptTag = noopFn;
 		// Check attributes on current script
 		for(let script=document?.currentScript;script;script=0){
-			// Options data-scopedom-options='{"globalContext":false}'
+			// Options data-scopedom-options='{"globalContext":false,"documentContext":true,"documentDefaultView":false,"signalProxyAll":true}'
 			try{
 				let json, str = script?.getAttribute('data-scopedom-options') || null;
 				if(str && typeof str==='string') json = JSON.parse(str);
@@ -226,13 +260,14 @@ class ScopeDom {
 	}
 	
 	/**
-	 * Initialise the main instance of ScopeDom.
-	 *
-	 * This method creates and initializes the main ScopeDom instance, then begins DOM watching.
-	 * It should only be called once to set up the primary ScopeDom instance.
-	 *
+	 * (Static) Initialise the main instance of ScopeDom.
+	 * 
+	 * Creates and initialises the main ScopeDom instance, then begins DOM watching.
+	 * This is typically called from a script tag with data-scopedom-init attribute.
+	 * Only one main instance can exist - subsequent calls throw an error.
+	 * 
 	 * @static
-	 * @param {initOptionsDefaults|object|null} [initOptions] ScopeDom instance initialisation options
+	 * @param {initOptionsDefaults|object|null} [initOptions={}] Configuration options forwarded to the constructor
 	 * @returns {ScopeDom} The newly created ScopeDom instance
 	 * @throws {Error} If main instance has already been initialised
 	 */
@@ -243,9 +278,12 @@ class ScopeDom {
 	}
 	
 	/**
-	 * Get the main instance of ScopeDom if it has already been initialised.
+	 * (Static) Get the main instance of ScopeDom if it has already been initialised.
 	 * 
-	 * If the main instance is private, then an error is thrown.
+	 * Returns the main (public) instance. If it was created with `{ privateInstance:true }`,
+	 * an error is thrown instead - in that case you must keep and use the direct reference
+	 * returned from `init()`/the constructor, as it cannot be fetched again. `{ privateInstance:true }`
+	 * also disables late plugin adding (see `pluginAdd`).
 	 * 
 	 * @static
 	 * @returns {ScopeDom} The main instance of ScopeDom
@@ -258,23 +296,36 @@ class ScopeDom {
 	}
 	
 	/**
-	 * Define scope controller on main ScopeDom instance.
+	 * (Static) Define a scoped controller function on the main ScopeDom instance's global scope.
+	 * 
+	 * A scope controller is a function that runs inside the scope's context, giving access
+	 * to signal helpers (signal, createSignal, defineSignal, etc.) and the Proxy scope object.
+	 * Controllers can be named (for keyed access) or unnamed (the default controller).
 	 * 
 	 * @static
-	 * @param {Function|string|null} [name] Scope Controller Name
-	 * @param {ScopeDomCtrlCallback} [fn] Scope Controller Function
-	 * @returns {ScopeDom} ScopeDom instance
+	 * @param {Function|string|null} [name=null] Scope controller name (for keyed access). Can also pass a function directly as first argument as a shorthand.
+	 * @param {ScopeDomCtrlCallback} [fn=null] The controller function. Will be called during setup with a context object.
+	 * @returns {ScopeDom|undefined} The main ScopeDom instance (or nothing when the default controller is cleared)
 	 */
 	static controller(name=null,fn=null){
 		return ScopeDom.getInstance().controller(name,fn);
 	}
 	
 	/**
-	 * Add a plugin to all ScopeDom instances.
+	 * (Static) Add a plugin to all existing and future ScopeDom instances.
 	 * 
-	 * @param {object|Function} plugin Plugin object or constructor function
-	 * @returns {boolean} True if plugin was added successfully
-	 * @throws {Error} If late plugin adding is disabled
+	 * This method iterates over all registered ScopeDom instances and attempts
+	 * to add the plugin to each one. If the main instance has `allowLatePlugins:false`,
+	 * an error is thrown. Otherwise each instance's per-instance `pluginAdd(plugin)`
+	 * runs; instances whose `allowLatePlugins` is `false` are skipped silently, while a
+	 * `console.error` is logged only when a per-instance add returns false.
+	 * 
+	 * Later instances created will add the plugins during their construction.
+	 * 
+	 * @static
+	 * @param {object|Function} plugin Plugin object (with lifecycle hooks) or constructor function. If a constructor, it is called as `new plugin(ScopeDom, instance)`.
+	 * @returns {boolean} Always true (even if some instances rejected the plugin)
+	 * @throws {Error} If the main instance has late plugin adding disabled
 	 */
 	static pluginAdd(plugin){
 		if(mainInstance && !mainInstance.options.allowLatePlugins) throw new Error("ScopeDom: late plugin adding is disabled, due to main instance { allowLatePlugins:false }");
@@ -285,11 +336,11 @@ class ScopeDom {
 	}
 	
 	/**
-	 * Initialize a new ScopeDom instance
-	 *
+	 * Initialise a new ScopeDom instance
+	 * 
 	 * @constructor
 	 * @param {initOptionsDefaults|object|null} initOptions Configuration options for the instance
-	 * @throws {Error} If a private instance is already initialized, if documentContext is false when globalContext isn't, or onlyInstance is true when the main instance already exists
+	 * @throws {Error} If a private instance is already initialised, if documentContext is false when globalContext isn't, or onlyInstance is true when the main instance already exists
 	 */
 	constructor(initOptions={}){
 		if(onlyInstance) throw new Error("ScopeDom: a private instance is already initialised");
@@ -378,10 +429,29 @@ class ScopeDom {
 		this.domWaitForMain.observe(document.head.parentNode,{ __proto__:null, subtree:false, childList:true, attributes:false });
 	}
 	
+	/**
+	 * MutationObserver callback for the transient wait-for-body observer.
+	 * 
+	 * Fires when document.head.parentNode receives child list changes. Triggers the
+	 * main DOM initialization once document.body becomes available.
+	 * 
+	 * @private
+	 * @param {MutationRecord[]|null} muts Mutation records from domWaitForMain
+	 */
 	#domWaitForMainElement(muts){
 		if(document.body) this.#domOnMainElement();
 	}
 	
+	/**
+	 * Transition from waiting-for-body to full DOM observation.
+	 * 
+	 * Sets this.mainElement to document.body, disconnects the transient domWaitForMain
+	 * observer, then starts subtree-wide domObserver and begins depth-first scanning
+	 * of all existing elements. Optionally triggers on-ready callbacks via
+	 * setReadyOnDomLoaded() and setReadyOnRaf().
+	 * 
+	 * @private
+	 */
 	#domOnMainElement(){
 		if(!this.mainElement) this.mainElement = document.body;
 		if(this.domWaitForMain){
@@ -436,6 +506,15 @@ class ScopeDom {
 		return this;
 	}
 	
+	/**
+	 * Signal helper method names to extract from the signalController and inject into the callback object.
+	 * 
+	 * These are the exact signal-controller method names injected into the callback object (as `ScopeDomCtrlCallbackObj`,
+	 * see `handleScopeCtrlFn`).
+	 * 
+	 * @private
+	 * @type {Array<string>}
+	 */
 	#scopeCtrlFnArgs = ['signal','createSignal','defineSignal','assignSignals','computeSignal','proxySignal','defineProxySignal','preventUpdates','preventObservers','resolveSignal'];
 	
 	/**
@@ -445,6 +524,7 @@ class ScopeDom {
 	 * 
 	 * @param {Proxy|object} proxy The proxy object for scope access
 	 * @param {ScopeDomCtrlCallback} fn The controller function to execute
+	 * @returns {void}
 	 */
 	handleScopeCtrlFn(proxy,fn){
 		let signalCtrl = this.scopeCtrl.signalCtrl, signalMethods = Object.fromEntries(
@@ -476,6 +556,17 @@ class ScopeDom {
 		this.domObserver.observe(element,{ subtree:true, childList:true, attributes:false });
 	}
 	
+	/**
+	 * MutationObserver callback for the persistent subtree observer.
+	 * 
+	 * Processes all mutation records: connected elements are processed via
+	 * connectElementAndChildren (depth-first connect with ancestor-before-descendant
+	 * ordering), disconnected elements are unwrapped via disconnectElementAndChildren.
+	 * When nodes are added, the pending connected-node queue is checked afterward.
+	 * 
+	 * @private
+	 * @param {MutationRecord[]} muts Mutation records from domObserver subtree watch
+	 */
 	#domTreeObserver(muts){
 		let check = false;
 		for(let m of muts){
@@ -489,19 +580,45 @@ class ScopeDom {
 	/**
 	 * Set up ready callback when DOM becomes interactive or complete.
 	 * 
-	 * Triggers onReady immediately if DOM is already loaded.
-	 * 
-	 * @param {boolean} domComplete DOM is complete
+	 * Triggers onReady immediately if document.readyState !== 'loading'.
+	 * Otherwise listens for readystatechange events at 'interactive' and 'complete'.
 	 */
 	setReadyOnDomLoaded(){
 		if(document.readyState!=='loading') this.triggerOnReady(); // Do not delay this
 		this.eventRegistry.add(document,'readystatechange',this.#boundOnDOMReadyStateChange,{ capture:true, passive:true, once:false });
 	}
 	
+	/**
+	 * DOM readiness state machine: 0 = uninitialized, 1 = interactive, 2 = complete.
+	 * 
+	 * Updated by #onDOMReadyStateChange in response to readystatechange events.
+	 * Used by isElementLoaded to gate processing of partially-loaded DOM nodes.
+	 * 
+	 * @private
+	 * @type {number}
+	 */
 	#domState = 0;
 	
+	/**
+	 * Bound readystatechange listener for document.
+	 * 
+	 * Bound once during construction to avoid re-binding on every event.
+	 * 
+	 * @private
+	 * @type {Function}
+	 */
 	#boundOnDOMReadyStateChange = this.#onDOMReadyStateChange.bind(this);
 	
+	/**
+	 * readystatechange event listener for document.
+	 * 
+	 * Tracks DOM readiness state machine: 'interactive' → state 1 (calls triggerOnReady
+	 * for interactive-ready callbacks), 'complete' → state 2 (removes the listener and
+	 * calls triggerOnReady with domComplete=true for full-load callbacks).
+	 * 
+	 * @private
+	 * @param {Event} evt readystatechange event (unused, consumed internally)
+	 */
 	#onDOMReadyStateChange(evt){
 		switch(document.readyState){
 			case 'interactive':
@@ -525,16 +642,21 @@ class ScopeDom {
 	}
 	
 	/**
-	 * Check if all ready callbacks have been triggered.
+	 * Check if the ready lifecycle has completed (all listeners cleared).
 	 * 
-	 * @returns {boolean} True if ready
+	 * Returns true when all on-ready listeners have been triggered and cleared.
+	 * Useful for checking whether initPlugins and DOM scanning have finished.
+	 * 
+	 * @returns {boolean} True if the DOM-ready lifecycle has completed
 	 */
 	isReady(){ return !this.onReadyListeners; }
 	
 	/**
-	 * Check if DOM is ready (all DOM ready callbacks triggered).
+	 * Check if the DOM-ready lifecycle has completed (all DOM-ready listeners cleared).
 	 * 
-	 * @returns {boolean} True if DOM is ready
+	 * Returns true when all onDOMReady listeners have been triggered and cleared.
+	 * 
+	 * @returns {boolean} True if the DOM-ready lifecycle has completed
 	 */
 	isDOMReady(){ return !this.onDOMReadyListeners; }
 	
@@ -553,6 +675,19 @@ class ScopeDom {
 		}
 	}
 	
+	/**
+	 * Execute all on-ready listeners and trigger $update for plugin/application hooks.
+	 * 
+	 * Batches the compute queue to run before the animation frame, marks isDuringOnReady
+	 * for instant-call gating, clears the listener list, fires all callbacks, emits
+	 * $update to scope-level listeners ($emit), forces compute queue to empty, then
+	 * defers #endOnReady to reset the isDuringOnReady flag after the microtask turn.
+	 * 
+	 * Uses three-layer timing integration: deferNextCompute for the compute queue,
+	 * deferTask to defer endOnReady, and $update emits to scopeControllerContext listeners.
+	 * 
+	 * @private
+	 */
 	#handleOnReadyUpdate(){
 		if(!this.onReadyListeners) return;
 		// Force next compute batch to run before animation frame
@@ -579,6 +714,15 @@ class ScopeDom {
 		for(const fn of list) try{ fn(); }catch(err){ console.error(err); }
 	}
 	
+	/**
+	 * Reset isDuringOnReady after the ready update cycle completes.
+	 * 
+	 * Called via originalDefer after #handleOnReadyUpdate - this defers the
+	 * flag reset to the next microtask turn, allowing the compute queue to
+	 * run and DOM updates to apply before the flag is cleared.
+	 * 
+	 * @private
+	 */
 	#endOnReady(){
 		this.isDuringOnReady = false;
 	}
@@ -678,16 +822,20 @@ class ScopeDom {
 	 * Connect an element and all its children.
 	 * 
 	 * @param {HTMLElement} element The element to connect
-	 * @param {boolean} [act=true] Connect elements
+	 * @param {boolean} [act=true] Connect elements (act=false on recursive descent)
 	 * @param {Set} [list] Set of elements being processed
 	 * @param {boolean} [checkIgnoreParents=false] Check parent elements for ignore attributes
 	 */
 	connectElementAndChildren(element,act=true,list=new Set(),checkIgnoreParents=false){ // Connect parent before children
+		// Stop early: comment nodes get a minimal connect; non-elements, SCRIPT, STYLE are skipped entirely
 		if(element.nodeType===commentNodeType){ this.connectElement(element); return; }
 		if(element.nodeType!==elementNodeType || element.nodeName==='SCRIPT' || element.nodeName==='STYLE') return;
 		if(this.isElementIgnored(element,checkIgnoreParents)) return;
+		// Queue this element, then recurse into children (depth-first, parent-before-children).
+		// TEMPLATE / SVG / ShadowRoot recursion is stopped so plugins (not the main scanner) handle those.
 		list.add(element);
 		if(element.childNodes && element.nodeName!=='TEMPLATE' && element.nodeName!=='svg' && !element.shadowRoot) for(let e of Array.from(element.childNodes)) this.connectElementAndChildren(e,false,list);
+		// Only process elements that are currently connected to the live DOM - disconnected nodes are deferred
 		if(act) for(let e of list.values()) if(e.isConnected) this.connectElement(e);
 	}
 	
@@ -700,8 +848,10 @@ class ScopeDom {
 	 */
 	disconnectElementAndChildren(element,act=true,list=new Set()){ // Disconnect children before parent
 		if(this.isElementIgnored(element,true)) return;
+		// Disconnect children FIRST (depth-first) before processing this element
 		if(element.childNodes) for(let e of Array.from(element.childNodes)) this.disconnectElementAndChildren(e,false,list);
 		list.add(element);
+		// Only process elements no longer connected to the live DOM
 		if(act) for(let e of list.values()) if(!e.isConnected) this.disconnectElement(e);
 	}
 	
@@ -731,7 +881,11 @@ class ScopeDom {
 	}
 	
 	/**
-	 * Check and connect pending elements that are now loaded.
+	 * Final pass to connect and trigger onElementLoaded for elements that were deferred earlier.
+	 * 
+	 * Iterates pendingConnectNodes and triggers connectElementAndChildren for any that are now
+	 * isElementLoaded. Also triggers onElementLoaded callbacks for any element that was deferred
+	 * waiting for loading (eg, template elements). Called from triggerOnReady and the MutationObserver.
 	 */
 	checkPendingConnectElements(){
 		for(let e of this.pendingConnectNodes) if(this.isElementLoaded(e,true)) this.connectElementAndChildren(e);
@@ -835,7 +989,7 @@ class ScopeDom {
 	 * 
 	 * @param {scopeElementAttribDefaults} attrib The attribute object
 	 * @param {Array<string>|Set<string>|null} [whitelist] Whitelist of option keys/names
-	 * @param {boolean} [updateOption=true] Update the fallback option 's value to '' (consume)
+	 * @param {boolean} [updateOption=true] Update the fallback option's value to '' (consume)
 	 * @param {boolean} [updateAttrib=true] Update attribute with fallback value
 	 * @returns {string|null} The fallback value
 	 */
@@ -859,7 +1013,7 @@ class ScopeDom {
 	}
 	
 	/**
-	 * Parse an attribute optionm used mostly by plugins.
+	 * Parse an attribute option used mostly by plugins.
 	 * 
 	 * @param {HTMLElement} element The element
 	 * @param {Map<string,scopeElementAttribOptionDefaults>} attribOpts The attribute options map
@@ -925,15 +1079,15 @@ class ScopeDom {
 	 * @param {HTMLElement} fromElement The original element to alias from
 	 */
 	elementScopeSetAlias(toElement,fromElement){
-		// Element Scopes
+		// Alias element scopes: add fromElement to toElement's extra scope list (so variable resolution walks to fromElement)
 		let toScopeList = this.elementExtraScopes.get(toElement);
 		if(!toScopeList) this.elementExtraScopes.set(toElement,[fromElement]);
 		else if(toScopeList.indexOf(fromElement)===-1) toScopeList.push(fromElement);
-		// Isolated Scopess
+		// Propagate isolation: if fromElement is isolated, make toElement isolated too (prevents ancestor scope leakage)
 		let fromIsolated = this.elementIsolatedScopes.has(fromElement);
 		let toIsolated = this.elementIsolatedScopes.has(toElement);
 		if(fromIsolated && !toIsolated) this.elementIsolatedScopes.add(toElement);
-		// Scope Controller
+		// Scope controller: if toElement has no controller yet, create one that delegates to fromElement's controller
 		let fromScopeCtrl = this.cacheElementScopeCtrls.get(fromElement);
 		let toScopeCtrl = this.cacheElementScopeCtrls.has(toElement);
 		if(fromScopeCtrl && !toScopeCtrl){
@@ -981,6 +1135,7 @@ class ScopeDom {
 	 * @param {string} expression The expression to execute
 	 * @param {object|null} [extra=null] Extra scopes (handy for plugins)
 	 * @param {object} [options] execExpression options
+	 * @returns {execExpResult} execExpression result (runFn + getScopes + setScopes + proxy)
 	 */
 	elementExecExp(elementScopeCtrl,expression,extra=null,options={}){
 		let extraScopes = extra?[extra]:[], elementScopes = this.getElementScopes(elementScopeCtrl.element);
@@ -1018,17 +1173,24 @@ class ScopeDom {
 		let arr = this.elementExtraScopes.get(key), isolatedParent = isolated?.parentNode;
 		for(let i=0,l=arr.length; i<l; i++){
 			let item = arr[i];
-			if(item instanceof nodeProto.constructor){ // Flatten
+			// Item is a node/element - flatten into its own scope list
+			if(item instanceof nodeProto.constructor){
+				// Isolated scoping: only include items that are a child or sibling of the isolated element
+				// Prevents isolated scopes from pulling in ancestor scopes unintentionally
 				if(isolated){
 					let isChildOrSibling = false;
 					for(let e=item; e; e=e.parentNode) if(e===isolated || e===isolatedParent){ isChildOrSibling=true; break; }
 					if(!isChildOrSibling) continue;
 				}
-				if(uniqueKeys.has(item)) continue; // Prevent endless recursion
-				if(!this.elementExtraScopes.has(item)) continue; // Ignore other nodes/elements in scope list
+				// Prevent endless recursion on circular extraScope references
+				if(uniqueKeys.has(item)) continue;
+				// Ignore non-scope nodes/elements in the scope list
+				if(!this.elementExtraScopes.has(item)) continue;
 				uniqueKeys.add(item);
+				// Tail-recursive flatten
 				list = list.concat(this.resolveElementScopes(item,isolated,uniqueKeys));
 			}
+			// Item is already a non-element scope object - use directly
 			else list.push(item);
 		}
 		return list;
@@ -1322,6 +1484,21 @@ class pluginOnElementExpression {
 	}
 }
 
+/**
+ * Attach shared core classes and utilities as static members on ScopeDom.
+ * 
+ * This exposes all internal classes and shared utilities as static properties on the ScopeDom
+ * class so they can be used as `ScopeDom.timing`, `ScopeDom.signalController`, etc. without
+ * direct import. Each member is either a utility function, a core class, or an internal helper.
+ * 
+ * Utilities: regexMatchAll, regexExec, regexTest, setAttribute, setUnion
+ * Timing: timing (three-layer batch scheduler)
+ * Scope system: scopeInstance, scopeBase, scopeController, scopeElementContext, scopeElementController
+ * Expression system: execExpression, execExpressionProxy
+ * Signal system: signalController, signalObserver, signalProxy, signalInstance, resolveSignal
+ * Event registry: eventRegistry
+ * Plug-in info classes: pluginOnElementPlug, pluginOnElementExpression
+ */
 Object.assign(ScopeDom,{
 	regexMatchAll, regexExec, regexTest,
 	setAttribute, setUnion,

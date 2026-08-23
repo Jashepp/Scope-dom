@@ -21,16 +21,37 @@ import {
 import ScopeDom from "../scopedom.js";
 
 /**
- * ScopeDom built-in attributes.
+ * Built-in Attributes - central handler for ScopeDom's core reactive attribute features.
  * 
- * Handles onConnect & onDisconnect lifecycle for built-in attributes.
- * Called by ScopeDom.triggerElementConnect & ScopeDom.triggerElementDisconnect.
+ * The builtinAttributes class is a plugin handler that processes ScopeDom's built-in
+ * attributes by dispatching to the appropriate handlers on element connect/disconnect.
+ * It is the primary mechanism through which ScopeDom's attribute system (as opposed to
+ * the signal system) makes DOM updates reactive.
+ * 
+ * Supported attributes:
+ * - $swap - Element/Template replacement with template contents
+ * - $scope / $scope-name - Create new scopes (with optional $scope:isolate)
+ * - $connect / $init - Execute expression on element connection (supports :raf, :instant)
+ * - $disconnect / $deinit - Execute expression on element disconnection (supports :raf, :instant)
+ * - $update / $update-name - Execute expression on ScopeDom update events (before/after)
+ * - $class - Class list management via Expression (Array/Set/Map/Object)
+ * - $signal-name:watch - Watch signal changes and execute expression
+ * - $signal-name:compute - Compute and update signal value from expression
+ * - $on-* / $once-* - DOM event listeners from expressions
  * 
  * @class builtinAttributes
  */
 export class builtinAttributes {
 	
-	/** @type {ScopeDom} ScopeDom instance */
+	/**
+	 * Built-in attributes handler constructor.
+	 *
+	 * Stores a reference to the ScopeDom instance for use by all attribute handlers during
+	 * element connect/disconnect processing.
+	 *
+	 * @constructor
+	 * @param {ScopeDom} instance The ScopeDom instance this handler is bound to
+	 */
 	constructor(instance){
 		this.instance = instance;
 	}
@@ -38,9 +59,13 @@ export class builtinAttributes {
 	/**
 	 * Handle element onConnect for built-in attributes.
 	 * 
+	 * Dispatches to specialized handler methods based on attribute name parts.
+	 * Returns false when $swap is processed (preventing further attribute or plugin processing).
+	 * 
 	 * @param {HTMLElement} element The element being connected
-	 * @param {Map<string,scopeElementAttribDefaults>} attribs The parsed attributes
-	 * @param {scopeElementController} elementScopeCtrl The scope controller for the element
+	 * @param {Map<string,scopeElementAttribDefaults>} attribs Parsed ScopeDom attributes Map
+	 * @param {scopeElementController} elementScopeCtrl The scope element controller for the element
+	 * @returns {boolean|undefined} false if $swap was processed (skip further attributes/plugins); undefined otherwise
 	 */
 	onConnect(element,attribs,elementScopeCtrl){
 		let instance = this.instance, onReadyQueue = [];
@@ -96,6 +121,15 @@ export class builtinAttributes {
 		if(onReadyQueue.length>0) instance.onReady(this.#processOnConnectOnReadyQueue.bind(this,onReadyQueue),false);
 	}
 	
+	/**
+	 * Execute queued onConnect callbacks during the onReady lifecycle.
+	 * 
+	 * Called via instance.onReady() to run connect-related expressions for elements
+	 * whose attributes required DOM readiness.
+	 * 
+	 * @param {Array<Function>} queue Queue for deferred callbacks
+	 * @private
+	 */
 	#processOnConnectOnReadyQueue(queue){
 		for(let cb of queue) cb.apply(this);
 	}
@@ -103,9 +137,11 @@ export class builtinAttributes {
 	/**
 	 * Handle element onDisconnect for built-in attributes.
 	 * 
+	 * Dispatches to #attrDisconnect for deinit/disconnect attributes only.
+	 * 
 	 * @param {HTMLElement} element The element being disconnected
-	 * @param {Map<string,scopeElementAttribDefaults>} attribs The parsed attributes
-	 * @param {scopeElementController} elementScopeCtrl The scope controller for the element
+	 * @param {Map<string,scopeElementAttribDefaults>} attribs Parsed ScopeDom attributes Map
+	 * @param {scopeElementController} elementScopeCtrl The scope element controller for the element
 	 */
 	onDisconnect(element,attribs,elementScopeCtrl){
 		let instance = this.instance;
@@ -129,14 +165,15 @@ export class builtinAttributes {
 	}
 	
 	/**
-	 * <template $swap> content \</template>
+	 * <template $swap> content replacement.
 	 * 
-	 * The template element will be swapped/replaced with the template contents when the template has finished loading.
+	 * Replaces the template element with an anchor comment node and registers an onElementLoaded
+	 * callback to swap in the template contents (or a wrapper element if $swap has a value).
+	 * No other built-in or plugin attributes are processed on the template element.
 	 * 
-	 * A value can be specified $swap="div" to swap the template with an element, with the contents as it's children.
-	 * 
-	 * No other built-in attributes or plugin attributes will be processed on the template element.
-	 * If a value is specified, all other attributes will be moved onto the new element.
+	 * @param {HTMLElement} element The template element to swap
+	 * @param {Map<string,scopeElementAttribDefaults>} attribs Parsed ScopeDom attributes Map
+	 * @private
 	 */
 	#attrSwap(element,attribs){
 		let anchor = document.createComment(` Template-Swap-Anchor ${this.instance.dev?element.cloneNode(false).outerHTML:''} `);
@@ -145,6 +182,14 @@ export class builtinAttributes {
 		this.instance.onElementLoaded(anchor,this.#attrSwap_onElementLoaded.bind(this,element,attribs,anchor));
 	}
 	
+	/**
+	 * onElementLoaded callback for $swap.
+	 * 
+	 * Removes $swap attribute from template, creates replacement element if $swap has a value,
+	 * and replaces the anchor comment with either the new element or the template content fragment.
+	 * 
+	 * @private
+	 */
 	#attrSwap_onElementLoaded(element,attribs,anchor){
 		let swap = attribs.get('swap'), fragment=element.content, dom=fragment;
 		element.removeAttribute(swap.attribute);
@@ -157,15 +202,18 @@ export class builtinAttributes {
 	}
 	
 	/**
-	 * $scope="{ localVariable:123 }" or $scope-name="namedController"
+	 * $scope attribute handler: inline scope object expression or named controller.
 	 * 
-	 * Creates a new scope for the element. The element & all children will access this scope before parent scopes.
+	 * Creates a new scope for the element. All children walk up to access this scope.
+	 * If $scope:isolate is set, the scope is isolated from parent chains (reachable only via $scopeParent/$scopeTop).
+	 * The expression is evaluated in the parent scope context so it can reference parent variables.
+	 * $scopeElement is injected into the scope for self-reference.
 	 * 
-	 * A scope can be isolated from its parents, via the $scope:isolate option. The parent scopes are then only accessible via $scopeParent and $scopeTop.
-	 * 
-	 * The scope expression is executed while in the parent scope context, so specific variables can be passed through.
-	 * 
-	 * $scopeElement is available in the scope, which is the element that the scope is attached to.
+	 * @private
+	 * @param {HTMLElement} element The element to attach the scope to
+	 * @param {scopeElementController} elementScopeCtrl The current element scope controller
+	 * @param {scopeElementAttribDefaults|null} scopeAttrib The inline $scope attribute definition
+	 * @param {scopeElementAttribDefaults|null} scopeNamedAttrib The $scope-name attribute definition
 	 */
 	#attrScope(element,elementScopeCtrl,scopeAttrib,scopeNamedAttrib){
 		let instance = this.instance;
@@ -205,11 +253,18 @@ export class builtinAttributes {
 	}
 	
 	/**
-	 * $connect="exp" or $init="exp"
+	 * $connect or $init attribute handler: run expression on element connection.
 	 * 
-	 * Runs the expression when the element is connected to the DOM.
+	 * Compiles the expression into a connectCB and defers execution via timing based on options.
+	 * :raf defers to RAF, :instant runs immediately, otherwise uses deferTask.
 	 * 
-	 * The expression execution is deferred. :raf option executes it on next animation frame. :instant option executes it immediately.
+	 * @private
+	 * @param {HTMLElement} element The element being connected
+	 * @param {scopeElementAttribDefaults} attrib The $connect attribute definition
+	 * @param {scopeElementController} elementScopeCtrl The scope element controller
+	 * @param {Map<string,scopeElementAttribOptionDefaults>} options Parsed attribute options
+	 * @param {Array<Function>} onReadyQueue Queue for deferred onReady callbacks
+	 * @param {string|null} [value] Expression value from the attribute
 	 */
 	#attrConnect(element,attrib,elementScopeCtrl,options,onReadyQueue,value){
 		if(value===null) value = this.instance.elementAttribFallbackOptionValue(attrib,['raf','instant']);
@@ -221,6 +276,16 @@ export class builtinAttributes {
 		}
 	}
 	
+	/**
+	 * Execute connect expression with timing defer based on :raf/:instant options.
+	 * 
+	 * @private
+	 * @param {HTMLElement} element The element
+	 * @param {string} $attribute Original attribute name
+	 * @param {ScopeDomAttribOption|null} raf :raf option value
+	 * @param {ScopeDomAttribOption|null} instant :instant option value
+	 * @param {Function} connectCB Compiled expression function
+	 */
 	#attrConnect_onReady(element,$attribute,raf,instant,connectCB){
 		if(raf && !timing.isDuringRAF) timing.onceAnimation(element,$attribute,connectCB);
 		else if(instant) connectCB();
@@ -228,11 +293,16 @@ export class builtinAttributes {
 	}
 	
 	/**
-	 * $disconnect="exp" or $deinit="exp"
+	 * $disconnect or $deinit attribute handler: run expression on element disconnection.
 	 * 
-	 * Runs the expression when the element is disconnected from the DOM.
+	 * Compiles the expression into a disconnectCB and defers execution via timing based on options.
+	 * :raf defers to RAF, :instant runs immediately, otherwise uses deferTask.
 	 * 
-	 * The expression execution is deferred. :raf option executes it on next animation frame. :instant option executes it immediately.
+	 * @private
+	 * @param {HTMLElement} element The element being disconnected
+	 * @param {scopeElementAttribDefaults} attrib The $disconnect attribute definition
+	 * @param {scopeElementController} elementScopeCtrl The scope element controller
+	 * @param {Map<string,scopeElementAttribOptionDefaults>} options Parsed attribute options
 	 */
 	#attrDisconnect(element,attrib,elementScopeCtrl,options){
 		let { value, attribute:$attribute } = attrib;
@@ -247,13 +317,19 @@ export class builtinAttributes {
 	}
 	
 	/**
-	 * $update="exp" or $update-name="exp"
+	 * $update or $update-name attribute handler: run expression on scope update events.
 	 * 
-	 * Runs the expression when ScopeDom updates occur (when $update() is called).
+	 * If a name suffix is present (eg, $update-customword), the expression runs on
+	 * $update('customword') events. If $update:before or $update:after options are set,
+	 * they determine whether the event is dispatched before or after the main update.
 	 * 
-	 * If a 'name' is specified, such as $update-customword, then it will only be executed when $update('customword') is called.
-	 * 
-	 * Executing before or after can be done with $update:before="exp" or $update:after="exp"
+	 * @private
+	 * @param {HTMLElement} element The element
+	 * @param {scopeElementAttribDefaults} attrib The $update attribute definition
+	 * @param {scopeElementController} elementScopeCtrl The scope element controller
+	 * @param {Map<string,scopeElementAttribOptionDefaults>} options Parsed attribute options
+	 * @param {string|null} [name2] Optional name suffix for scoped updates
+	 * @param {string|null} [value] Expression value from the attribute
 	 */
 	#attrUpdate(element,attrib,elementScopeCtrl,options,name2,value){
 		let suffix = null;
@@ -273,13 +349,19 @@ export class builtinAttributes {
 	}
 	
 	/**
-	 * $class="[ 'list','of','classes' ]" or $class="{ class1:true, class2:false }"
+	 * $class attribute handler: append/update class list from expression result.
 	 * 
-	 * The element's class list is appended/updated based on the expression result.
+	 * Creates a signalObserver to track the expression's reactivity. When the signal changes,
+	 * computes a new class list (appending Array/Set values or applying Object/Map keys) and
+	 * renders it via RAF batched DOM update.
 	 * 
-	 * If the expression is an Array/Set, they will be appended to the existing class list.
-	 * 
-	 * If the expression is an Object/Map, keys are class names, values determine if the class should be present (true=keep/add, false=remove).
+	 * @private
+	 * @param {HTMLElement} element The element
+	 * @param {scopeElementAttribDefaults} attrib The $class attribute definition
+	 * @param {scopeElementController} elementScopeCtrl The scope element controller
+	 * @param {Map<string,scopeElementAttribOptionDefaults>} options Parsed attribute options
+	 * @param {string|null} [value] Expression value
+	 * @param {Array<Function>} onReadyQueue Queue for deferred callbacks
 	 */
 	#attrClass(element,attrib,elementScopeCtrl,options,value,onReadyQueue){
 		let instance = this.instance;
@@ -303,16 +385,45 @@ export class builtinAttributes {
 	#attrClassDefaultSymbol = Symbol('$attrClassDefault');
 	#attrClassAbortSymbol = Symbol('$attrClassAbortSymbol');
 	
+	/**
+	 * Undo $class attribute changes on element disconnect.
+	 * 
+	 * Restores the element's original `class` attribute from the default value stored during
+	 * #attrClass setup. If the default was empty, removes the `class` attribute entirely.
+	 * Sets the abort flag so no further renders occur after restore.
+	 * 
+	 * @private
+	 * @param {HTMLElement} element The element being disconnected
+	 * @param {scopeElementAttribDefaults} attrib The $class attribute definition
+	 * @param {scopeElementController} elementScopeCtrl The scope element controller
+	 * @param {Map<string,scopeElementAttribOptionDefaults>} options Parsed attribute options
+	 */
 	#attrClassUndo(element,attrib,elementScopeCtrl,options){
-		if(this.#attrClassDefaultSymbol in element){
-			let value = element[this.#attrClassDefaultSymbol];
-			if((value??'')==='') element.removeAttribute('class');
-			else element.setAttribute('class',element.className=value);
-			delete element[this.#attrClassDefaultSymbol];
-			element[this.#attrClassAbortSymbol].abort = true;
-		}
+		if(!(this.#attrClassDefaultSymbol in element)) return;
+		let value = element[this.#attrClassDefaultSymbol];
+		if((value??'')==='') element.removeAttribute('class');
+		else element.setAttribute('class',element.className=value);
+		delete element[this.#attrClassDefaultSymbol];
+		element[this.#attrClassAbortSymbol].abort = true;
 	}
 	
+	/**
+	 * Compute the new class list string from the $class expression result.
+	 * 
+	 * Clears signal observations for the current frame, then evaluates the compiled
+	 * expression through the observer's recording scope. Handles three result types:
+	 *  - string: concatenated with default classes (space-separated)
+	 *  - Array / Set: filtered, joined, and appended after default classes
+	 *  - Map / Object: toggles classes on/off using keys as class names and values as booleans
+	 * Returns the fully resolved class string for rendering.
+	 * 
+	 * @private
+	 * @param {HTMLElement} element The target element
+	 * @param {signalObserver} obs The signal observer used for recording signal access
+	 * @param {Function} runFn Compiled expression function (wrapped by obs.wrapRecorder)
+	 * @param {string} defaultClasses Original `class` attribute value at connect time
+	 * @returns {string|undefined} The computed class string, or undefined if the abort flag is set
+	 */
 	#attrClass_compute(element,obs,runFn,defaultClasses){
 		if(element[this.#attrClassAbortSymbol].abort) return;
 		obs.clearSignals();
@@ -335,6 +446,16 @@ export class builtinAttributes {
 		}
 	}
 	
+	/**
+	 * Render the computed class list onto the element.
+	 *
+	 * Applies the new className string via `element.className`. A no-op if the abort flag
+	 * is set (element disconnected mid-render) or if no class string is provided.
+	 * 
+	 * @private
+	 * @param {HTMLElement} element The target element
+	 * @param {string} newClassName The computed class string to apply
+	 */
 	#attrClass_render(element,newClassName){
 		if(element[this.#attrClassAbortSymbol].abort) return;
 		if(newClassName!==void 0) element.className = newClassName;
@@ -344,12 +465,18 @@ export class builtinAttributes {
 	#attrClass_filterEntries([k,v]){ return typeof k==='string' && k.length>0; }
 	
 	/**
-	 * $signal-name:watch="exp" or $signal-name:compute="exp"
+	 * $signal-name:watch or $signal-name:compute attribute handler.
 	 * 
-	 * Creates reactive bindings to signals, with the `name` being the resolvable signal to use (eg, $signal-obj.prop).
+	 * For watch mode: creates a signalObserver that re-runs the watch expression when the signal changes.
+	 * For compute mode: creates a computed signal that updates the named signal from a source expression.
 	 * 
-	 * The `watch` option runs an expression when the signal changes.
-	 * The `compute` option computes and updates the signal value from another expression.
+	 * @private
+	 * @param {HTMLElement} element The element
+	 * @param {scopeElementAttribDefaults} attrib The $signal attribute definition
+	 * @param {scopeElementController} elementScopeCtrl The scope element controller
+	 * @param {Map<string,scopeElementAttribOptionDefaults>} options Parsed attribute options
+	 * @param {string} name2 The signal name (eg, 'obj.prop')
+	 * @param {string|null} [value] Expression value
 	 */
 	#attrSignal(element,attrib,elementScopeCtrl,options,name2,value){
 		let instance = this.instance, signalCtrl = instance.scopeCtrl.signalCtrl;
@@ -379,13 +506,21 @@ export class builtinAttributes {
 	}
 	
 	/**
-	 * $on-click="exp" or $on-scope-customevt="exp" or $on-window-keypress="exp"
+	 * $on-target-event or $once-target-event attribute handler.
 	 * 
-	 * Registers event listeners on DOM elements ($on- or $on-dom-), scope controller ($on-scope-), window ($on-window-) or document ($on-document-).
+	 * Routes to the appropriate event method based on type (on/once) and target (dom/scope/window/document).
+	 * The expression is compiled and executed with timing defer based on :raf/:instant options.
+	 * The :pd option prevents default behavior.
 	 * 
-	 * The `raf` option defers execution to next animation frame.
-	 * The `instant` option executes the expression immediately.
-	 * The `pd` option prevents default behavior.
+	 * @private
+	 * @param {HTMLElement} element The element
+	 * @param {scopeElementAttribDefaults} attrib The $on-* attribute definition
+	 * @param {scopeElementController} elementScopeCtrl The scope element controller
+	 * @param {Map<string,scopeElementAttribOptionDefaults>} options Parsed attribute options
+	 * @param {string} type 'on' or 'once'
+	 * @param {string} target Event target ('dom', 'scope', 'window', 'document')
+	 * @param {string} eventName Event name (eg, 'click', 'keypress')
+	 * @param {string|null} [value] Expression value
 	 */
 	#attrEvent(element,attrib,elementScopeCtrl,options,type,target,eventName,value){
 		let instance = this.instance;
@@ -412,6 +547,24 @@ export class builtinAttributes {
 		}
 	}
 	
+	/**
+	 * Event listener callback for $on-* / $once-* attribute handlers.
+	 *
+	 * Applies prevent-default if configured, injects the event into firstScope, then routes
+	 * execution through timing.deferTask, timing.onceAnimation (RAF), or immediate execution
+	 * based on configuration flags (raf, instant, pd).
+	 * 
+	 * @private
+	 * @param {HTMLElement} element The source element
+	 * @param {boolean} raf Whether to defer execution via requestAnimationFrame
+	 * @param {boolean} instant Whether to execute immediately without defer
+	 * @param {boolean} pd Whether to prevent the default event behavior
+	 * @param {object} firstScope The first scope for $event injection
+	 * @param {Function} eventCB The expression callback to execute
+	 * @param {string} $attribute The attribute key string used for RAF dedup
+	 * @param {Event} event The DOM event object
+	 * @returns {boolean|void} False if preventDefault was applied, otherwise void
+	 */
 	#attrEvent_listener(element,raf,instant,pd,firstScope,eventCB,$attribute,event){
 		if(pd) event.preventDefault();
 		firstScope.$event = event;

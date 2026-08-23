@@ -27,24 +27,37 @@ import { signalProxy, resolveSignal } from "./proxy.js";
 export const signalSymb = Symbol('$signalInstance');
 
 /**
- * Signal Instance that represents a reactive signal value.
+ * Signal Instance - the basic reactive value unit of the signal system.
  * 
- * The signal instance is the core mechanism of the reactive signal system.
+ * A signalInstance is the atomic unit of reactivity. It holds a single `value`
+ * (which can be any type including Promise) with getter/setter access, can be
+ * subscribed to via a signalObserver, and supports async value resolution - when
+ * the signal's value is a Promise, the controller receives a change notification
+ * only when the Promise is fulfilled (rather than synchronously on every set).
  * 
- * This class implements:
- * - Signal Controller & Signal Observer hooks to handle dependancy tracking
- * - Promise/async value handling with automatic change notification
- * - WeakRef support for object values (memory-safe references)
- * - Pull-based listeners for lazy evaluation patterns
- * - Handy type methods (thenable, Symbol.toPrimitive, etc.)
+ * Internally, the signal uses WeakRef when `useWeakRef` is true, which allows
+ * the GC to reclaim the referenced value object if the signal is no longer
+ * accessible, minimising memory leaks in long-running applications.
  * 
- * @class signalInstance
- * @property {signalController} ctrl - The parent signal controller managing this instance
- * @property {any} value - The current signal value (also accessible via get()/set())
+ * The signal also supports PULL-based computed patterns: a signal can be
+ * invalidated via {@link invalidatePull}, and pull listeners added via
+ * {@link addPullListener} will be invoked on each {@link get} call, enabling
+ * lazy evaluation where computations only happen when the value is actually needed.
+ * 
+ * Type helpers implement standard JavaScript semantics: `then()` makes the signal
+ * itself thenable, `valueOf()`, `Symbol.iterator`, and `[Symbol.toStringTag]` are
+ * delegated to the underlying value.
+ * However these are discouraged for regular use, as the developer should be aware
+ * of if the value type is a signalInstance or the raw value itself. These helpers
+ * may be removed in future versions.
  * 
  * @see {@link signalController} - Signal Controller for managing signals and observers
  * @see {@link signalObserver} - Signal Observer for tracking signal dependencies
  * @see {@link signalProxy} - Signal Proxy for deep reactivity for objects with automatic signal tracking
+ * 
+ * @class signalInstance
+ * @property {signalController} ctrl - The parent signal controller managing this instance's lifecycle and notification callbacks
+ * @property {any} value - The current signal value (also accessible via get()/set())
  */
 export class signalInstance {
 	
@@ -78,9 +91,9 @@ export class signalInstance {
 	/**
 	 * Constructs a new signalInstance.
 	 * 
-	 * @param {signalController} signalCtrl - The parent signal controller
-	 * @param {any} value - Initial signal value
-	 * @param {boolean} [useWeakRef=false] - Use WeakRef for object values
+	 * @param {signalController} signalCtrl The parent signal controller
+	 * @param {any} value Initial signal value
+	 * @param {boolean} [useWeakRef=false] Use WeakRef for object values, except when value is already a signalInstance.
 	 */
 	constructor(signalCtrl,value,useWeakRef=false){
 		let isPrimitive = value!==Object(value);
@@ -98,7 +111,7 @@ export class signalInstance {
 	/**
 	 * Get parent signalController
 	 * 
-	 * @return {signalController} The signalController
+	 * @returns {signalController} The signalController
 	 */
 	get ctrl(){ return this.#ctrl; }
 	
@@ -108,9 +121,9 @@ export class signalInstance {
 	 * The getter returns the dereferenced WeakRef value, otherwise the raw value.
 	 * The setter stores the value, either as a WeakRef (useWeakRef=true), or as the raw value.
 	 * 
-	 * @returns {any} The current signal value
-	 * @param {any} v - The value to store
 	 * @private
+	 * @returns {any} The current signal value
+	 * @param {any} v The value to store
 	 */
 	get #value(){ return (this.#useWeakRef && this.#isObject) ? this.#_value?.deref() : this.#_value; }
 	set #value(v){ this.#isObject=(v===Object(v)); this.#_value = (this.#useWeakRef && this.#isObject) ? new WeakRef(v) : v; }
@@ -122,9 +135,9 @@ export class signalInstance {
 	 * 
 	 * The setter stores the Promise, either as a WeakRef (useWeakRef=true), or as the raw Promise.
 	 * 
-	 * @returns {Promise} The current Promise
-	 * @param {Promise} v - The Promise to store
 	 * @private
+	 * @returns {Promise} The current Promise
+	 * @param {Promise} v The Promise to store
 	 */
 	get #promise(){ return this.#useWeakRef ? this.#_promise?.deref() : this.#_promise; }
 	set #promise(v){ this.#_promise = this.#useWeakRef ? new WeakRef(v) : v; }
@@ -135,8 +148,8 @@ export class signalInstance {
 	 * This method bypasses the normal observer notification flow, allowing internal state changes
 	 * without cascading updates. It also resets the #pendingPull flag since a new value has been set.
 	 * 
-	 * @param {any} v - The value to set
 	 * @private
+	 * @param {any} v The value to set
 	 */
 	#setInner(v){
 		this.#pendingPull = false;
@@ -158,7 +171,7 @@ export class signalInstance {
 	 * Pull listeners are called when the signal is read AND the signal has been invalidated via invalidatePull().
 	 * This creates a lazy evaluation pattern where computations only happen when needed.
 	 * 
-	 * @param {Function} fn - Listener callback function
+	 * @param {Function} fn Listener callback function
 	 */
 	addPullListener(fn){ this.#pullListeners.push(fn); }
 	
@@ -168,7 +181,7 @@ export class signalInstance {
 	 * This method creates a {@link signalObserver} instance and registers the provided callback.
 	 * The listener & observer can be deactivated by calling observer.clear().
 	 * 
-	 * @param {Function} fn - Listener callback function to invoke on signal changes
+	 * @param {Function} fn Listener callback function to invoke on signal changes
 	 * @returns {signalObserver} The signal signalObserver instance
 	 */
 	subscribe(fn){
@@ -183,6 +196,7 @@ export class signalInstance {
 	 * When an observer is in "recording mode", accessing a signal causes that signal to be recorded as a dependency on the observer.
 	 * 
 	 * This method is automatically called internally by {@link get}.
+	 * 
 	 * @see {@link signalObserver}
 	 */
 	record(){ this.#ctrl.triggerRecording(this); }
@@ -195,8 +209,9 @@ export class signalInstance {
 	 * 
 	 * This method is automatically called internally by {@link set}.
 	 * 
-	 * @param {any} [oldValue] - The old value to pass to observers
 	 * @see {@link signalObserver}
+	 * 
+	 * @param {any} [oldValue] The old value to pass to observers
 	 */
 	changed(oldValue=void 0){
 		this.#ctrl.triggerChange(this,oldValue,this.#value);
@@ -228,9 +243,10 @@ export class signalInstance {
 	 * 
 	 * If this is a PULL-based compute signal, and if it has been invalidated ({@link invalidatePull}), the value will be computed during this method.
 	 * 
-	 * @returns {any} The current signal value
 	 * @see {@link signalObserver}
 	 * @see {@link signalController.computeSignalPull}
+	 * 
+	 * @returns {any} The current signal value
 	 */
 	get(){
 		if(this.#isGetting) return this.#value;
@@ -249,13 +265,14 @@ export class signalInstance {
 	 * 
 	 * This method calls {@link changed} which propagates the updated signal value.
 	 * 
-	 * If the value is a Promise, the change is invoked when the promise is fulfilled (if this signal's value remains as the same promise).
-	 * If it's already fulfilled, the change will simply be deferred.
+	 * If the value is a Promise, the change is invoked when it fulfills - but only if this signal's value is still the same Promise reference.
+	 * Re-setting the same Promise is a no-op and returns false (checked by reference, not by whether the Promise has already settled).
 	 * 
-	 * @param {any} value - The new value to set (can be any type, including Promise)
-	 * @returns {boolean|undefined} Returns true if it's changing to a new value, otherwise false if it's already that value.
 	 * @see {@link signalObserver}
 	 * @see {@link changed}
+	 * 
+	 * @param {any} value The new value to set (can be any type, including Promise)
+	 * @returns {boolean} Returns true if it's changing to a new value, otherwise false if it's already that value.
 	 */
 	set(value){
 		if(value instanceof signalInstance) value = value.get();
@@ -285,7 +302,7 @@ export class signalInstance {
 	 * Instead of calling signal.get() or signal.set(value), you can use signal.value directly.
 	 * 
 	 * @returns {any} The current signal value
-	 * @param {any} value - The new value to set
+	 * @param {any} value The new value to set
 	 */
 	get value(){ return this.get(); }
 	set value(value){ this.set(value); }
@@ -331,8 +348,8 @@ export class signalInstance {
 	 * 
 	 * By implementing then(), signals become "thenable" and can be treated as Promises, including with await.
 	 * 
-	 * @param {Function} resolve - Promise resolve callback
-	 * @param {Function} [reject] - Promise reject callback
+	 * @param {Function} resolve Promise resolve callback
+	 * @param {Function} [reject] Promise reject callback
 	 * @returns {Promise} A Promise that contains the signal's value
 	 */
 	then(resolve,reject=void 0){ return Promise.resolve(this.get()).then(resolve,reject); }
@@ -359,9 +376,9 @@ export class signalInstance {
 	 * Converts the signal's value to a primitive type.
 	 * 
 	 * This method implements Symbol.toPrimitive, which JavaScript calls during operations like:
-	 * - String conversion (e.g., `+value`, `${value}`)
-	 * - Numeric conversion (e.g., `value + 0`)
-	 * - Comparison operators (e.g., value == 42)
+	 * - String conversion (eg, `+value`, `${value}`)
+	 * - Numeric conversion (eg, `value + 0`)
+	 * - Comparison operators (eg, value == 42)
 	 * 
 	 * The hint parameter indicates the desired primitive type per ECMAScript spec:
 	 * - 'default': Used for == operator, returns value as-is
@@ -372,9 +389,10 @@ export class signalInstance {
 	 * 
 	 * For unknown hints, a console.info warning is logged for debugging purposes.
 	 * 
-	 * @param {string} hint - The desired primitive type ('default', 'string', or 'number')
+	 * @param {string} hint The desired primitive type ('default', 'string', or 'number')
 	 * @returns {any} The converted primitive value (type depends on hint), or undefined if unknown hint
 	 */
+	// [DEPRECATED] [Symbol.toPrimitive] - We shouldn't have value coercion in signals, as it can lead to unexpected behavior. Use explicit get() instead.
 	// [Symbol.toPrimitive](hint){
 	// 	let v=this.get(), fn=v?.[Symbol.toPrimitive];
 	// 	if(fn) return fn(hint);

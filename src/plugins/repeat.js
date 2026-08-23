@@ -1,10 +1,18 @@
 "use strict";
+/** @typedef {import('../scopedom.js').default} ScopeDom */
 
+/** @type {Symbol} Symbol key identifying repeat-scope elements in elementExtraScopes lists */
 const symbRepeatElementScope = Symbol("pluginRepeatElementScope");
 
+/** @type {boolean} Whether Element.prototype.moveBefore is available (modern browsers) */
 const hasMoveBeforeSupport = 'moveBefore' in Element.prototype && typeof Element.prototype.moveBefore==="function";
 
-let timing, resolveSignal, setAttribute;
+/** @type {any} Shared scopeDom.timing reference */
+let timing;
+/** @type {any} Shared scopeDom.resolveSignal reference */
+let resolveSignal;
+/** @type {any} Shared scopeDom.setAttribute reference */
+let setAttribute;
 
 /**
  * Plugin for repeating elements based on data iteration.
@@ -13,33 +21,70 @@ let timing, resolveSignal, setAttribute;
  * - Data iteration with automatic DOM reuse and caching
  * - Scope management with aliasing for repeated contexts
  * - Anchor node system for tracking DOM positions
- * - Signals & Event-driven updates for scope and DOM changes
+ * - Signal & event-driven updates for scope and DOM changes
  * - Support for template elements and other elements
- * - Performance optimization via DOM caching with configurable time limits
- *
+ * - Performance optimization via DOM caching with a configurable time limit
+ * 
+ * The `$repeat` attribute (`<template $repeat>`, a child `<template>`, `$repeat:use="element"`,
+ * or `$repeat:node`) and its options:
+ *   $repeat                repeat expression - the data list to iterate (default empty)
+ *   $repeat:use            selector or node used as an external template/source (default null)
+ *   $repeat:node           treat the host element itself as the template source (default false)
+ *   $repeat:once           evaluate at most once; no reactive re-trigger (default false)
+ *   $repeat:key            per-item key property name in the item scope (default $key)
+ *   $repeat:item           per-item data property name in the item scope (default $item)
+ *   $repeat:scope          property name whose value is merged into each item's existing scope (default null)
+ *   $repeat:update-scope   scope event name that re-executes the list (default $update)
+ *   $repeat:update-dom     dom event name that re-executes the list (default $update)
+ *   $repeat:on-update      expression run after each rendered DOM pass (default null)
+ *   $repeat:cache          DOM-cache grace period in seconds; converted to ms internally, clamped >= 0 (default 1 -> 1000 ms)
+ * 
+ * Four template-source modes: `<template $repeat>` (element becomes the template),
+ * `<any $repeat><template>` (single child template is the source), `$repeat:use="selector-or-node"`
+ * (external element/template), `$repeat:node` (the host element is the template).
+ * 
+ * Item-scoping helpers applied to each rendered item:
+ *   $index                 zero-based index in the current list
+ *   $isFirst               true for the first item
+ *   $isLast                true for the last item
+ *   [key] / $key           current item's key (property name = $repeat:key; default $key)
+ *   [item] / $item         current item's value (property name = $repeat:item; default $item)
+ *   $prevKey / $prevItem   previous item's key / value (undefined for the first)
+ *   $nextKey / $nextItem   next item's key / value (undefined for the last)
+ * 
  * @class pluginRepeat
  */
 export class pluginRepeat {
 	
-	/**
-	 * @returns {string} The name of the plugin
-	 */
+	/** @returns {string} The name of the plugin */
 	get name(){ return 'repeat'; }
 	static get name(){ return 'repeat'; }
 	
-	#eventMap; #stateMap; #afterElementDC;
+	/** @type {ScopeDom} ScopeDom class */
+	ScopeDom;
+	/** @type {ScopeDom} ScopeDom instance */
+	instance;
+	/** @type {WeakMap<HTMLElement, Set<Function>>} Per-element event removal callbacks */
+	#eventMap;
+	/** @type {WeakMap<HTMLElement, object>} Per-element repeat state */
+	#stateMap;
+	/** @type {WeakMap<HTMLElement, Function>} Per-element post-disconnect callback */
+	#afterElementDC;
 	
 	/**
-	 * @param {Object} ScopeDom - The ScopeDom class
-	 * @param {Object} instance - The ScopeDom instance
+	 * Initializes the pluginRepeat instance, captures shared references from ScopeDom, and sets up
+	 * per-element tracking maps for events, state, and post-disconnect callbacks.
+	 * 
+	 * @param {object} ScopeDom The ScopeDom class reference
+	 * @param {object} instance The ScopeDom instance
 	 */
 	constructor(ScopeDom,instance){
 		this.ScopeDom = ScopeDom;
 		this.instance = instance;
 		this.isElementLoaded = instance.isElementLoaded.bind(instance);
-		this.#eventMap = new WeakMap(); // element, set (removeEvent cb)
-		this.#stateMap = new WeakMap(); // element, state
-		this.#afterElementDC = new WeakMap(); // element, cb
+		this.#eventMap = new WeakMap();
+		this.#stateMap = new WeakMap();
+		this.#afterElementDC = new WeakMap();
 		timing = ScopeDom.timing;
 		resolveSignal = ScopeDom.resolveSignal;
 		setAttribute = ScopeDom.setAttribute;
@@ -49,9 +94,9 @@ export class pluginRepeat {
 	 * Called when the plugin is connected to an element.
 	 * Sets up repeat logic based on repeat attribute presence and interaction with pluginIf.
 	 * 
-	 * @param {Object} plugInfo - Information about the plugin connection
-	 * @param {HTMLElement} plugInfo.element - The element being connected (may be a template)
-	 * @param {Map<string, Object>} plugInfo.attribs - Parsed ScopeDom attributes of the element
+	 * @param {Object} plugInfo Information about the plugin connection
+	 * @param {HTMLElement} plugInfo.element The element being connected (may be a template)
+	 * @param {Map<string, Object>} plugInfo.attribs Parsed ScopeDom attributes of the element
 	 */
 	onConnect(plugInfo){
 		let { element, attribs } = plugInfo;
@@ -71,8 +116,8 @@ export class pluginRepeat {
 	 * Called when the plugin disconnects from an element.
 	 * Cleans up event listeners, signal observers, and removes DOM elements.
 	 * 
-	 * @param {Object} plugInfo - Information about the plugin connection, contains `element`
-	 * @param {HTMLElement} plugInfo.element - The element being disconnected
+	 * @param {Object} plugInfo Information about the plugin connection, contains `element`
+	 * @param {HTMLElement} plugInfo.element The element being disconnected
 	 */
 	onDisconnect(plugInfo){
 		let { element } = plugInfo;
@@ -120,8 +165,8 @@ export class pluginRepeat {
 	 * Reconfigures repeat when anchors are reconnected.
 	 * Re-registers event listeners and triggers execution.
 	 * 
-	 * @param {HTMLElement} stateKey - The anchor element whose state needs re-setup
 	 * @private
+	 * @param {HTMLElement} stateKey The anchor element whose state needs re-setup
 	 */
 	#reconfigureRepeat(stateKey){
 		let { instance } = this;
@@ -148,10 +193,11 @@ export class pluginRepeat {
 	 * This is the core method that handles template creation, anchor setup,
 	 * option parsing, and state initialization for the repeat functionality.
 	 * 
-	 * @param {Object} plugInfo - The plugin connection info
-	 * @param {Object} attrib - The repeat attribute info
-	 * @returns {boolean} true if setup is deferred (waiting for element to load)
 	 * @private
+	 * @param {Object} plugInfo The plugin connection info
+	 * @param {Object} attrib The repeat attribute info
+	 * @returns {boolean|undefined} true on successful setup or when setup is deferred to onReady/onElementLoaded;
+	 *   undefined when configuration is aborted (re-forwards to #reconfigureRepeat, or the template has no content)
 	 */
 	#configureRepeat(plugInfo,attrib){
 		let { ScopeDom, instance, isElementLoaded } = this;
@@ -310,14 +356,14 @@ export class pluginRepeat {
 	 * Creates a template from a source element when the original element is removed.
 	 * Clones the element, creates a new template, and transfers attributes.
 	 * 
-	 * @param {Object} state - The repeat state object
-	 * @param {Object} options - Template creation options
-	 * @param {HTMLElement} options.fromElement - The source element to clone
-	 * @param {boolean} options.includeNodeOption - Include the node itself in the template
-	 * @param {Comment} options.fromElementAnchor - The anchor comment to position the element
-	 * @param {Object} options.attribute - The repeat attribute object
-	 * @param {Map} options.attribOptions - Parsed attribute options
 	 * @private
+	 * @param {Object} state The repeat state object
+	 * @param {Object} options Template creation options
+	 * @param {HTMLElement} options.fromElement The source element to clone
+	 * @param {boolean} options.includeNodeOption Include the node itself in the template
+	 * @param {Comment} options.fromElementAnchor The anchor comment to position the element
+	 * @param {Object} options.attribute The repeat attribute object
+	 * @param {Map} options.attribOptions Parsed attribute options
 	 */
 	#createTemplateFromElement(state,{ __proto__=null, fromElement, includeNodeOption, fromElementAnchor=null, attribute, attribOptions }){
 		let { mainTemplate, anchorStart } = state;
@@ -352,9 +398,9 @@ export class pluginRepeat {
 	 * Registers an event removal callback for an element.
 	 * Adds the callback to the event map for cleanup later.
 	 * 
-	 * @param {HTMLElement} element - The element to register the event for
-	 * @param {Function} removeEvent - The event removal callback
 	 * @private
+	 * @param {HTMLElement} element The element to register the event for
+	 * @param {Function} removeEvent The event removal callback
 	 */
 	#registerEventRemoval(element,removeEvent){
 		if(!this.#eventMap.has(element)) this.#eventMap.set(element,new Set());
@@ -365,13 +411,13 @@ export class pluginRepeat {
 	 * Executes an expression and returns an execution object.
 	 * Optionally wraps the execution function with signal observation.
 	 * 
-	 * @param {Object} plugInfo - The plugin connection info
-	 * @param {string} exp - The expression to execute
-	 * @param {boolean} useReturn - Use the return value
-	 * @param {Object} extra - Extra data to merge into the scope
-	 * @param {Object} signalObs - Optional signal observer to wrap the execution
-	 * @returns {Object|null} The execution object or null if expression is empty
 	 * @private
+	 * @param {Object} plugInfo The plugin connection info
+	 * @param {string} exp The expression to execute
+	 * @param {boolean} useReturn Use the return value
+	 * @param {Object} extra Extra data to merge into the scope
+	 * @param {Object} signalObs Optional signal observer to wrap the execution
+	 * @returns {Object|null} The execution object or null if expression is empty
 	 */
 	#executeExpression(plugInfo,exp,useReturn=true,extra=null,signalObs=null){
 		if(!(exp?.length>0)) return null;
@@ -384,10 +430,10 @@ export class pluginRepeat {
 	 * Runs expressions for the repeat directive, handling signal observation,
 	 * expression execution, and triggering DOM updates.
 	 * 
-	 * @param {Object} plugInfo - The plugin connection info
-	 * @param {Object} state - The repeat state object
-	 * @param {string} exp - The expression to execute
 	 * @private
+	 * @param {Object} plugInfo The plugin connection info
+	 * @param {Object} state The repeat state object
+	 * @param {string} exp The expression to execute
 	 */
 	#runExpressions(plugInfo,state,exp){
 		let { instance } = this;
@@ -434,17 +480,16 @@ export class pluginRepeat {
 	/**
 	 * Handles DOM rendering for repeat directives.
 	 * 
-	 * Such as:
-	 * - Item detection and reuse from previous items
-	 * - DOM caching with time-based expiration
-	 * - Scope setup for each repeated item
-	 * - Efficient DOM diffing and patching
+	 * Detects matching items from previous renderings (via object identity or key matching),
+	 * reuses or creates DOM nodes for each item, sets up per-item scope bindings, and performs
+	 * efficient DOM patching via Element.prototype.moveBefore (modern browsers) or
+	 * insertBefore fallback with DocumentFragment buffering. Old DOM nodes for unreferenced items are removed.
 	 * 
-	 * @param {Object} plugInfo - The plugin connection info
-	 * @param {Object} state - The repeat state object
-	 * @param {number} callUpdateIndex - The update index to ignore older calls
-	 * @param {any} execResult - The result to iterate over
 	 * @private
+	 * @param {Object} plugInfo The plugin connection info (contains element, attribs, etc.)
+	 * @param {Object} state The repeat state object (contains anchor, templates, cache, etc.)
+	 * @param {number} callUpdateIndex The update index; stale calls beyond current updateIndex are ignored
+	 * @param {any} execResult The expression result to iterate over for DOM rendering
 	 */
 	#handleRepeatDOM(plugInfo,state,callUpdateIndex,execResult){
 		let { instance } = this;
@@ -466,20 +511,25 @@ export class pluginRepeat {
 		else if(Symbol.iterator in Object(execResult)){ itemsArr=Object.entries(Array.from(execResult)); isArr=true; }
 		else if(Object(execResult)===execResult){ itemsArr=Object.entries(execResult); }
 		else { execResult=[]; itemsArr=[]; isArr=true; }
-		// Try to match old DOM/anchors to new items for reuse
+		// TODO: option to specify function (or strings? key-, item.name+) to sort itemsArr
+		// TODO: async iterable - use $emitDomUpdate when promise items are resolved
+		// DOM Matching - try to reuse existing DOM nodes for items whose identity hasn't changed
+		// Matching is by object reference === (primary), then by key if array mode
+		// Nodes are only reused if not already assigned to another index
 		if(!oldItemsArr) oldItemsArr=[]; if(!oldDomArr) oldDomArr=[]; if(!oldAnchorArr) oldAnchorArr=[];
 		for(let i=0,l=itemsArr.length; i<l; i++){
 			let [key,item] = itemsArr[i];
 			let [oldKey,oldItem] = oldItemsArr[i]||[];
-			// If item is unchanged (same key and same object reference), reuse old DOM and anchor
+			// Direct position match: if item at same index didn't change, reuse without search
 			if(oldKey!==void 0 && (isArr || oldKey===key) && oldItem===item){
 				domArr[i] = oldDomArr[i];
 				anchorArr[i] = oldAnchorArr[i];
 				continue;
 			}
-			// Search for a matching old item that can be reused (not already used)
+			// Fall back to searching the full old items array for a matching item (handles reordering)
 			if(oldKey!==void 0) for(let j=0,k=oldItemsArr.length; j<k; j++){
 				let [oKey,oItem] = oldItemsArr[j];
+				// Ensure both key match (or isArr mode) and object reference ===, and node/anchor are unclaimed
 				if((isArr || oKey===key) && oItem===item && domArr.indexOf(oldDomArr[j])===-1 && anchorArr.indexOf(oldAnchorArr[j])===-1){
 					domArr[i] = oldDomArr[j];
 					anchorArr[i] = oldAnchorArr[j];
@@ -487,10 +537,12 @@ export class pluginRepeat {
 				}
 			}
 		}
-		// DOM Cache - Set up DOM caching for time-based expiration
+		// DOM Cache - set up time-based DOM reuse to avoid re-cloning template content
+		// Caching is keyed by item reference (WeakMap) with Date.now()-based expiration
 		let usableDOMCache = new Map();
 		if(cacheLimit>0 && oldItemsArr.length===oldAnchorArr.length){
-			// Map current/old DOM positions to their item indices
+			// Build a map of currently-existing DOM nodes grouped by their current item index
+			// Walk from anchorStart to anchorEnd, collecting sibling nodes and assigning them to the nearest anchor
 			let currentDomNodes = [];
 			if(oldAnchorArr.length>0) for(let e=anchorStart.nextSibling, i=null; e && e!==anchorEnd; e=e.nextSibling){
 				let oai = oldAnchorArr.indexOf(e);
@@ -500,35 +552,34 @@ export class pluginRepeat {
 					currentDomNodes[i].push(e);
 				}
 			}
-			// Cache current (old) DOM nodes against old items
+			// Store the current DOM nodes in the WeakMap cache for future re-use
 			let now = Date.now(), itemDomCache = domCache.get(execResult), skipItems = [];
 			if(currentDomNodes.length===oldItemsArr.length){
 				if(!itemDomCache) domCache.set(execResult,itemDomCache=new WeakMap());
 				for(let i=0,l=currentDomNodes.length; i<l; i++){
 					let [key,item] = oldItemsArr[i];
-					// Skip if already tracked or non-object item
+					// Skip non-object items and items already tracked in this batch (avoids stale cache entries)
 					if(skipItems.indexOf(item)!==-1 || Object(item)!==item) continue;
 					let nodes = currentDomNodes[i];
-					// Cache if not already cached; otherwise skip (duplicate items)
 					if(!usableDOMCache.has(item)){
 						itemDomCache.set(item,[now,nodes]);
 						usableDOMCache.set(item,nodes);
 					} else {
-						// Multiple of same item in array, so Skip & Remove nodes from cache
+						// Duplicate item in array: remove from cache - future renders can't safely reuse it
 						skipItems.push(item);
 						itemDomCache.delete(item);
 						usableDOMCache.delete(item);
 					}
 				}
 			}
-			// Find re-usable DOM Nodes in cache (within time limit)
+			// For each item in the new render list, check if cached DOM is available and still within expiry window
 			if(itemDomCache) for(let i=0,l=itemsArr.length; i<l; i++){
 				let [key,item] = itemsArr[i];
 				if(!usableDOMCache.has(item)){
 					if(itemDomCache.has(item)){
 						let [ts,nodes] = itemDomCache.get(item);
-						if(now-ts<=cacheLimit) usableDOMCache.set(item,nodes);
-						else itemDomCache.delete(item);
+						if(now-ts<=cacheLimit) usableDOMCache.set(item,nodes); // Still valid - reuse
+						else itemDomCache.delete(item); // Expired - remove
 					}
 				}
 			}
@@ -539,75 +590,82 @@ export class pluginRepeat {
 		let usedNodes = new Set(), usedAnchors = new Set();
 		for(let i=0,l=itemsArr.length; i<l; i++){
 			let [key,item] = itemsArr[i];
-			// Reuse cached DOM nodes if available, otherwise use old DOM
+			// Reuse cached DOM nodes if available, otherwise fall back to old DOM or clone
 			let nodes = usableDOMCache.get(item);
 			if(!nodes || nodes.length===0) nodes = domArr[i];
 			let anchor = anchorArr[i];
-			// Only use nodes & anchors once
+			// Only use nodes & anchors once (prevent double-assignment on duplicate items)
 			if(nodes && usedNodes.has(nodes)) nodes = null;
 			if(anchor && usedAnchors.has(anchor)) anchor = null;
-			// Dom Nodes - If no reusable nodes, clone from template
+			// If no reusable node set, clone fresh from template (cloneNode, NOT importNode)
 			if(!nodes || nodes.length===0){
 				nodes = Array.from(mainTemplate.content.cloneNode(true).childNodes);
-				// Alias node scopes to elementAnchor for cloned nodes
+				// Alias cloned node scopes to the elementAnchor so they resolve variables correctly
 				if(anchorStart.parentNode!==elementAnchor) for(let e of nodes) instance.elementScopeSetAlias(e,elementAnchor);
 			}
 			domArr[i] = nodes;
-			// Anchor - Create or update anchor comment node
+			// Anchor comment node: unique data per item, dev mode includes key info for debugging
 			let anchorData = ` Repeat-Item-Anchor ${instance.dev?(isArr?'Index '+key:'Key '+key):''} `;
 			if(!anchor) anchor = document.createComment(anchorData);
-			else if(anchor.data!==anchorData) anchor.data = anchorData;
+			else if(anchor.data!==anchorData) anchor.data = anchorData; // Update existing anchor text
 			anchorArr[i] = anchor;
 			// Mark as used
 			usedNodes.add(nodes);
 			usedAnchors.add(anchor);
-			// Set Element Scopes - Build local element scope with iteration metadata
+			// Build local item scope: $index, $isFirst, $isLast, $key, $item, $prevKey, $nextKey, $prevItem, $nextItem
 			let [$prevKey,$prevItem] = itemsArr[i-1]||[], [$nextKey,$nextItem] = itemsArr[i+1]||[];
 			let scope = { __proto__:null, $index:i, $isFirst:i===0, $isLast:i===l-1, [keyNameOption]:key, [itemNameOption]:item, $prevKey, $prevItem, $nextKey, $nextItem };
 			scope[symbRepeatElementScope] = elementAnchor;
-			anchor[symbRepeatElementScope] = elementAnchor;
-			// Apply scope to anchor element and alias scope on node elements
+			anchor[symbRepeatElementScope] = elementAnchor; // Tags anchor for scope resolution
+			// Apply scope to anchor + cloned nodes via elementExtraScopes
+			// Anchor gets the full scope; node elements get only an alias to the anchor's scope
 			for(let e of [anchor,...nodes]){
 				let scopesArr = eScopes.get(e)||[], scopeIndex = -1;
 				for(let i=0,l=scopesArr.length; i<l; i++){
 					let s = scopesArr[i];
+					// Only match repeat-element-scope-tagged entries
 					if(s[symbRepeatElementScope]!==elementAnchor) continue;
 					if(e===anchor){
 						if(scope[scopeNameOption] && s[scopeNameOption]) Object.assign(s[scopeNameOption],scope[scopeNameOption]);
-						else Object.assign(s,scope); // Update existing scope, use assign, so references remain correct
+						else Object.assign(s,scope); // Merge scope into existing entries; keep refs intact
 					}
-					else scopesArr[i] = anchor; // Alias to anchor's element scope
+					else scopesArr[i] = anchor; // Node aliases to its anchor's scope (single point of truth)
 					scopeIndex = i;
 					break;
 				}
-				if(scopeIndex===-1){ scopesArr.unshift(scope); scopeIndex=0; } // Add new scope
+				// If no existing repeat-scope entry, add this scope at the front
+				if(scopeIndex===-1){ scopesArr.unshift(scope); scopeIndex=0; }
+				// Maintain elementAnchor ordering: remove from old position, insert right after scopeIndex
 				if(elementAnchor!==e.parentNode){
-					let eaIndex = scopesArr.length>1 ? scopesArr.indexOf(elementAnchor) : -1; // Find elementAnchor
-					if(eaIndex!==-1 && eaIndex!==scopeIndex+1){ scopesArr.splice(eaIndex,1); eaIndex=-1; } // Remove elementAnchor
-					if(eaIndex===-1) scopesArr.splice(scopeIndex+1,0,elementAnchor); // Add elementAnchor after scopeIndex
+					let eaIndex = scopesArr.length>1 ? scopesArr.indexOf(elementAnchor) : -1;
+					if(eaIndex!==-1 && eaIndex!==scopeIndex+1){ scopesArr.splice(eaIndex,1); eaIndex=-1; }
+					// Ensure anchor sits right after scope
+					if(eaIndex===-1) scopesArr.splice(scopeIndex+1,0,elementAnchor);
 				}
-				if(!eScopes.has(e)) eScopes.set(e,scopesArr); // Save element scopes
+				// Save element scopes array
+				if(!eScopes.has(e)) eScopes.set(e,scopesArr);
 			}
-			// Add to expected DOM
+			// Track expected DOM (anchor + nodes) for reconciliation
 			expectedDOM.add(anchor);
 			for(let e of nodes) expectedDOM.add(e);
 		}
-		// Quick-Morph live DOM with expected DOM
+		// Reconcile current live DOM with expected DOM: insert, move, remove
+		// This "quick-morph" walks expected to found and moves/buffers DOM nodes into the right positions
 		let expectedArr = Array.from(expectedDOM), foundDOM = new Set();
-		// Collect currently existing DOM nodes between anchors
+		// Collect currently existing DOM nodes between the anchor pair as a Set for fast lookup
 		for(let e=anchorStart.nextSibling; e && e!==anchorEnd; e=e.nextSibling) foundDOM.add(e);
 		let foundArr = Array.from(foundDOM), fIndex = 0, tmpFragment = document.createDocumentFragment();
-		// Iterate through expected DOM in order, reconciling with found DOM
+		// Walk expected DOM left-to-right, reconciling each expected node with current live nodes
 		for(let i=0,l=expectedArr.length; i<l; i++){
 			let expected = expectedArr[i];
 			let found = foundArr[fIndex];
-			// Find moved element and remove intermediate old DOM
+			// If next live node exists but isn't the one we expect, find where expected actually is
 			if(found && found!==expected){
 				let foundAt = foundArr.indexOf(expected);
 				if(foundAt>fIndex){
 					let oldFI = fIndex;
 					found = foundArr[fIndex=foundAt];
-					// Remove intermediate DOM nodes that are no longer needed
+					// Remove intermediate DOM nodes that have shifted past this index and are no longer needed
 					for(let j=oldFI; j<fIndex; j++){
 						if(!hasMoveBeforeSupport || !expectedDOM.has(foundArr[j])){
 							foundArr[j].parentNode?.removeChild(foundArr[j]);
@@ -615,12 +673,12 @@ export class pluginRepeat {
 					}
 				}
 			}
-			// Remove old DOM if not in expected set
+			// If current live node is not the expected one and isn't in expected set, remove it (stale DOM)
 			if(found && found!==expected){
 				if(!hasMoveBeforeSupport || !expectedDOM.has(found)) found.parentNode?.removeChild(found);
 				fIndex++;
 			}
-			// Insert expected & buffered DOM nodes
+			// Live node matches expected: flush any buffered nodes before inserting
 			if(found===expected){
 				if(tmpFragment.childNodes.length>0){
 					found.parentNode.insertBefore(tmpFragment,found);
@@ -628,10 +686,10 @@ export class pluginRepeat {
 				}
 				fIndex++;
 			}
-			// Buffer DOM nodes
+			// Live node doesn't match and can't be moved here: buffer it for later insertion
 			else if(!hasMoveBeforeSupport || !expected.isConnected) tmpFragment.appendChild(expected);
 		}
-		// Clean up any remaining old DOM nodes
+		// Remove any remaining live nodes after fIndex that aren't in the expected set (stale overflow)
 		if(fIndex<foundArr.length){
 			for(let i=fIndex,l=foundArr.length; i<l; i++){
 				if(!hasMoveBeforeSupport || !expectedDOM.has(foundArr[i])){
@@ -639,9 +697,9 @@ export class pluginRepeat {
 				}
 			}
 		}
-		// Insert any buffered DOM nodes
+		// Flush buffered nodes to the end
 		if(tmpFragment.childNodes.length>0) anchorEnd.parentNode.insertBefore(tmpFragment,anchorEnd);
-		// Finalize DOM node placement using moveBefore for efficient reordering
+		// Final reorder pass using moveBefore (modern browsers only) - works right-to-left for correct positioning
 		if(hasMoveBeforeSupport){
 			for(let i=expectedArr.length-1; i>=0; i--){
 				let expected = expectedArr[i], after = expectedArr[i+1] || anchorEnd;
@@ -660,5 +718,6 @@ export class pluginRepeat {
 	
 }
 
+/** Auto-register: prefer ScopeDom.pluginAdd, else fallback to the ScopeDomPlugins discovery object. */
 let win = typeof window!=='undefined' && window;
 if(win) win.ScopeDom?.pluginAdd?.(pluginRepeat) || ((win.ScopeDomPlugins=win.ScopeDomPlugins||{}).pluginRepeat=pluginRepeat);

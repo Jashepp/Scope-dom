@@ -1,45 +1,70 @@
 "use strict";
+/** @typedef {import('../scopedom.js').default} ScopeDom */
 
+/** @type {HTMLStyleElement} Pre-injected CSS for hiding elements with $cloak attribute. */
 let styleReady = document.createElement('style');
 styleReady.setAttribute('type','text/css');
-styleReady.appendChild(document.createTextNode(`*[\\$cloak], *[\\$cloak\\:dom] { display:none !important; }`)); // ,*[\\$cloak\\:dom]
+styleReady.appendChild(document.createTextNode(`*[\\$cloak], *[\\$cloak\\:dom] { display:none !important; }`));
 document.head.prepend(styleReady);
 
 /**
- * Plugin for hiding elements until conditions are met.
- * Supports features like DOM swapping, style-based hiding, and event-driven reveal.
- *
+ * $cloak - hides an element until a condition becomes truthy, then reveals it.
+ * 
+ * A plugin that hides any element carrying a $cloak attribute until an expression
+ * evaluates truthy ('ready() && loaded()' by default), then 'uncloaks' it by removing
+ * the tracked per-element state and event subscriptions via #unCloak. The attribute
+ * may also be placed on a <template> to trigger the swap modes below.
+ * 
+ * The attribute and its $cloak:* options:
+ *   $cloak             reveal expression (default ready() && loaded())
+ *   $cloak:dom         DOM swap - replace the element with an anchor comment node
+ *   $cloak:swap        template swap - clone a template into place (only on <template>)
+ *   $cloak:on-show     add an expression run once on reveal
+ *   $cloak:update-scope re-evaluate when the scope emits the given event
+ *   $cloak:update-dom  re-evaluate when the DOM emits the given event
+ * 
  * @class pluginCloak
  */
 export class pluginCloak {
 
-	/**
-	 * @returns {string} The name of the plugin.
-	 */
+	/** @returns {string} The name of the plugin. */
 	get name(){ return 'cloak'; }
 	static get name(){ return 'cloak'; }
 	
-	#eventMap; #stateMap;
+	/** @type {ScopeDom} ScopeDom class */
+	ScopeDom;
+	/** @type {ScopeDom} ScopeDom instance */
+	instance;
+	/** @type {WeakMap<HTMLElement, Set<Function>>} Per-element event removal callbacks */
+	#eventMap;
+	/** @type {Map<HTMLElement, object>} Per-element cloak state */
+	#stateMap;
 	
 	/**
-	 * @param {Object} ScopeDom - The ScopeDom class
-	 * @param {Object} instance - The ScopeDom instance
+	 * Initialises the pluginCloak instance and installs the per-element event/state tracking maps.
+	 * 
+	 * @param {ScopeDom} ScopeDom The ScopeDom class reference
+	 * @param {ScopeDom} instance The ScopeDom instance
 	 */
 	constructor(ScopeDom,instance){
 		this.ScopeDom = ScopeDom;
 		this.instance = instance;
-		this.#eventMap = new WeakMap(); // element, set (removeEvent cb)
-		this.#stateMap = new Map(); // element, state
+		this.#eventMap = new WeakMap();
+		this.#stateMap = new Map();
 	}
 	
 	/**
 	 * Called when the plugin is connected to an element.
-	 * Sets up cloaking logic based on cloak attribute and expression evaluation.
-	 * When conditions are met, elements are "uncloaked" (revealed).
 	 * 
-	 * @param {Object} plugInfo - Information about the plugin connection
-	 * @param {HTMLElement} plugInfo.element - The element being connected
-	 * @param {Map<string, Object>} plugInfo.attribs - The ScopeDom parsed attributes of the element
+	 * Reads the $cloak attribute (and its $cloak:* options) to decide cloaking behaviour.
+	 * 
+	 * When conditions are met the element is "uncloaked" (revealed); its tracked state and
+	 * per-element events are then removed by #unCloak.
+	 * 
+	 * @param {Object} plugInfo Information about the plugin connection
+	 * @param {HTMLElement} plugInfo.element The element being connected
+	 * @param {Object} plugInfo.elementScopeCtrl The element's scope-controller context (has `.ctrl` plus the `$on`/`$onDom` bindings)
+	 * @param {Map<string, Object>} plugInfo.attribs The ScopeDom parsed attributes of the element
 	 */
 	onConnect(plugInfo){
 		let { ScopeDom, instance } = this;
@@ -61,7 +86,14 @@ export class pluginCloak {
 		// State
 		let state = { elementScopeCtrl, attrib, attribOpts, anchor, anchorScopeCtrl, onShowEvent, tplSwap };
 		this.#stateMap.set(element,state);
-		// Build Scope
+		/**
+		 * Build expression scope
+		 * @property {HTMLElement} $element The connected element
+		 * @property {Comment|null} $anchor The :dom/:swap anchor comment (null until swap mode sets it)
+		 * @property {Function} plugins ...names - true iff every named plugin is registered on the instance
+		 * @property {Function} loaded isElementLoaded() on the element (or anchor in swap mode)
+		 * @property {Function} ready instance.isReady()
+		 */
 		state.scope = {
 			$element:element, $anchor:null,
 			plugins: this.#hasPlugins.bind(this),
@@ -94,8 +126,11 @@ export class pluginCloak {
 	/**
 	 * Called when the plugin disconnects from an element.
 	 * 
-	 * @param {Object} plugInfo - Information about the plugin connection, contains `element`
-	 * @param {HTMLElement} plugInfo.element - The element being disconnected
+	 * If the element's anchor is connected but the element is not, it restores the element
+	 * from the anchor DOM swap. Otherwise unCloak is called without attribute removal.
+	 * Used when an element is removed from the DOM tree.
+	 * 
+	 * @param {Object} plugInfo Information about the plugin connection (contains `element`)
 	 */
 	onDisconnect(plugInfo){
 		let { element } = plugInfo;
@@ -110,7 +145,7 @@ export class pluginCloak {
 	 * Called when a new plugin is added to the instance.
 	 * Re-evaluates the expression for all tracked elements.
 	 * 
-	 * @param {Object} plugin - The plugin being added
+	 * @param {Object} plugin The plugin being added
 	 */
 	onPluginAdd(plugin){
 		if(plugin===this) return;
@@ -120,8 +155,9 @@ export class pluginCloak {
 	/**
 	 * Registers an event removal function.
 	 * 
-	 * @param {HTMLElement} element - The element to track
-	 * @param {Function} removeEvent - The event removal callback
+	 * @private
+	 * @param {HTMLElement} element The element to track
+	 * @param {Function} removeEvent The event removal callback
 	 */
 	#registerEventRemoval(element,removeEvent){
 		if(!this.#eventMap.has(element)) this.#eventMap.set(element,new Set());
@@ -131,9 +167,10 @@ export class pluginCloak {
 	/**
 	 * Removes cloak attributes from an element.
 	 * 
-	 * @param {HTMLElement} element - The element to modify
-	 * @param {Object} attrib - The cloak attribute information
-	 * @param {Map} attribOpts - The attribute options
+	 * @private
+	 * @param {HTMLElement} element The element to modify
+	 * @param {Object} attrib The cloak attribute information
+	 * @param {Map} attribOpts The attribute options
 	 */
 	#removeAttribs(element,attrib,attribOpts){
 		if(!element.hasAttribute(attrib.attribute)) return;
@@ -142,11 +179,13 @@ export class pluginCloak {
 	}
 	
 	/**
-	 * Uncloaks an element, removing it from tracking and revealing it.
+	 * Uncloaks an element: removes cloak attributes, clears all event listeners, deletes state tracking,
+	 * and restores the element from its anchor node (in DOM swap mode).
 	 * 
-	 * @param {Object} plugInfo - Information about the plugin connection
-	 * @param {Object} attrib - The cloak attribute information
-	 * @param {boolean} removeAttrib - Remove attributes
+	 * @private
+	 * @param {Object} plugInfo The plugin connection info (contains element and scope controller)
+	 * @param {Object} attrib The cloak attribute definition (contains attribute name and options)
+	 * @param {boolean} [removeAttrib=true] Remove cloak attributes from the element (true by default)
 	 */
 	#unCloak(plugInfo,attrib,removeAttrib=true){
 		let { instance } = this;
@@ -182,7 +221,8 @@ export class pluginCloak {
 	/**
 	 * Checks if specified plugins are registered.
 	 * 
-	 * @param {...string} pluginNames - The names of the plugins to check
+	 * @private
+	 * @param {...string} pluginNames The names of the plugins to check
 	 * @returns {boolean} True if all specified plugins are registered
 	 */
 	#hasPlugins(...pluginNames){
@@ -193,11 +233,15 @@ export class pluginCloak {
 	/**
 	 * Runs an expression and handles the result.
 	 * 
-	 * @param {Object} plugInfo - Information about the plugin connection
-	 * @param {Object} attrib - The cloak attribute information
-	 * @param {Object} state - The state object
-	 * @param {string} exp - The expression to run
-	 * @returns {boolean} True if the expression was successfully run
+	 * Executes the expression against the scope, then calls #unCloak on truthy results
+	 * and triggers onShowEvent if registered. Delegates to instance.elementExecExp with silentHas:true.
+	 * 
+	 * @private
+	 * @param {Object} plugInfo Information about the plugin connection (contains element, elementScopeCtrl)
+	 * @param {Object} attrib The cloak attribute information
+	 * @param {Object} state The state object (contains anchorScopeCtrl, onShowEvent, scope)
+	 * @param {string} exp The expression string to evaluate
+	 * @returns {any} The raw expression result (truthy → element is uncovered; falsy → kept cloaked)
 	 */
 	#runExpression(plugInfo,attrib,state,exp){
 		let { instance } = this;
@@ -215,5 +259,6 @@ export class pluginCloak {
 	
 }
 
+/** Auto-register: prefer ScopeDom.pluginAdd, else fallback to the ScopeDomPlugins discovery object. */
 let win = typeof window!=='undefined' && window;
 if(win) win.ScopeDom?.pluginAdd?.(pluginCloak) || ((win.ScopeDomPlugins=win.ScopeDomPlugins||{}).pluginCloak=pluginCloak);

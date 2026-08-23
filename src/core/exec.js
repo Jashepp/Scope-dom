@@ -19,20 +19,39 @@ import {
 	scopeInstance, scopeBase, scopeControllerContext, scopeController, scopeElementContext, scopeElementController,
 } from "./scope.js";
 
-const frozenNullObj=Object.freeze(Object.create(null));
+/**
+ * Execute & Build Expressions - the engine that turns ScopeDom expression strings
+ * into scope-aware JavaScript functions.
+ * 
+ * Transforms expression text (like `count + 1` or `$this.className = 'active'`) into
+ * executable JavaScript via code generation (try-catch, with($sdProxy)), caches it per
+ * source element to avoid redundant compilation, and resolves which scopes participate in
+ * read vs write access.
+ * 
+ * The proxy execution flow: buildExp generates a function via #generateCode and caches it
+ * before returning {runFn, proxy}; runExp calls buildExp and then invokes runFn() to return a result.
+ * 
+ * @see execExpression
+ * @see execExpressionProxy
+ * @see execExpResult
+ * @see execExpOptionsDefaults
+ * @see execExpProxyDefaults
+ */
+
+/** @type {object} Frozen null-object used as `unscopables` for expression `with` blocks */
+const frozenNullObj = Object.freeze(Object.create(null));
 
 /**
  * Default options for {@link execExpression.buildExp}.
  * 
- * @template {object} execExpOptionsDefaults
  * @typedef {object} execExpOptionsDefaults
  */
 export const execExpOptionsDefaults = {
-	/** @type {boolean} Optional argument name for the expression function (used for $sdcArgument) */
+	/** @type {string|null} Optional argument name for the expression function (used for $sdcArgument) */
 	argument: null,
 	/** @type {boolean} Use explicit return statement in generated code */
 	useReturn: false,
-	/** @type {boolean} Custom `this` binding for generated function, otherwise the proxy itself */
+	/** @type {object|null} Custom `this` binding for generated function, otherwise the proxy itself */
 	fnThis: null,
 	/** @type {boolean} Enable "use strict" in generated code */
 	strictMode: true,
@@ -40,17 +59,21 @@ export const execExpOptionsDefaults = {
 	useAsync: false,
 	/** @type {boolean} Always return true for property existence checks */
 	silentHas: true,
-	/** @type {boolean} Hide global variables from expression scopesc */
+	/** @type {boolean} Hide global variables from expression scopes */
 	globalsHide: true,
 	/** @type {boolean} Throw error when accessing hidden globals */
 	throwGlobals: true,
 	/** @type {boolean} Automatically execute the expression (false=build) */
 	run: true,
-	/** @type {Set<object>|null} Scopes to use own properties for hasOwnProperty checks */
+	/** @type {WeakSet<object>|null} Scopes to use own properties for hasOwnProperty checks */
 	scopeUseOwn: null,
-	/** @type {object|null} Scope controller for signal proxy support */
+	/** @type {scopeController|null} Scope controller for signal proxy support */
 	scopeCtrl: null,
-	/** @type {boolean} Auto-create signal proxies for non-primitive values */
+	/**
+	 * Use `useSignalProxy:true` when you want signal-aware expression resolution;
+	 * otherwise expressions run without signal proxies.
+	 * 
+	 * @type {boolean} Auto-create signal proxies for non-primitive values */
 	useSignalProxy: false,
 	/** @type {boolean} Returns signals instead of auto-resolving their value within #getResolve */
 	returnSignals: false,
@@ -61,7 +84,6 @@ export const execExpOptionsDefaults = {
 /**
  * Default options for {@link execExpressionProxy}.
  * 
- * @template {object} execExpProxyDefaults
  * @typedef {object} execExpProxyDefaults
  */
 const execExpProxyDefaults = {
@@ -71,15 +93,15 @@ const execExpProxyDefaults = {
 	getScopes: null,
 	/** @type {Set<object>} Scopes to write to (prototype chain of main scopes) */
 	setScopes: null,
-	/** @type {WeakSet|null} Scopes to use hasOwnProperty for (auto-created if null) */
+	/** @type {WeakSet<object>|null} Scopes to use hasOwnProperty for (auto-created if null) */
 	scopeUseOwn: null,
 	/** @type {boolean} Always return true for has checks */
 	silentHas: true,
 	/** @type {object|null} Global object (window) for global access */
 	globalObj: null,
-	/** @type {boolean} Hide globals from expression */
+	/** @type {boolean|null} Hide globals from expression */
 	globalsHide: null,
-	/** @type {boolean} Callback when global access is attempted (globalsHide=true) */
+	/** @type {Function|null} Callback when global access is attempted (globalsHide=true) */
 	globalCatch: null,
 	/** @type {scopeController|null} Scope controller */
 	scopeCtrl: null,
@@ -94,12 +116,11 @@ const execExpProxyDefaults = {
 /**
  * Result of {@link execExpression.buildExp}.
  * 
- * @template {object} execExpResult
  * @typedef {object} execExpResult
  * @property {null|any} result The execution result (null if not run, or Promise if async)
  * @property {object} firstScope The first scope in the getScopes Set
  * @property {Function} runFn The runnable function, wrapped with error console logging
- * @property {Error|any} logFnError Error logging callback function for expression errors
+ * @property {Function} logFnError Error logging callback function for expression errors (a bound Function, or noopFn outside DEV)
  * @property {Set<object>} getScopes Set of scopes to read from (for property get operations)
  * @property {Set<object>} setScopes Set of scopes to write to (for property set operations)
  * @property {execExpressionProxy} proxy The Proxy instance wrapping scope access for expressions
@@ -107,19 +128,13 @@ const execExpProxyDefaults = {
  */
 
 /**
- * Build & Execute Expressions for ScopeDom.
+ * Expression Builder & Executor - the engine that turns ScopeDom expression strings
+ * into executable JavaScript functions.
  * 
- * This class provides static methods to build and execute JavaScript expressions
- * within the context of ScopeDom scopes. It generates wrapper functions that
- * use the `with` statement to inject scope variables, and creates Proxy objects
- * for dynamic scope access during expression execution.
- * 
- * Key features:
- * - Dynamic code generation from expression strings
- * - Multi-scope resolution (main scopes, extra scopes, global objects)
- * - Async expression support (auto-detected via 'await' keyword)
- * - Signal integration for reactive property access
- * - Error handling and logging for expression failures
+ * The execExpression class is responsible for transforming expression text
+ * (like `count + 1`) into executable functions. It constructs argument lists
+ * from scope resolution, generates function bodies, and caches compiled functions
+ * to avoid redundant evaluation.
  * 
  * @class execExpression
  * @see {@link execExpResult} For the result structure of buildExp/runExp
@@ -143,6 +158,7 @@ export class execExpression {
 	 * 3. Declares local variables ($sdProxy, $sdError, arguments, constructor) to shadow globals
 	 * 4. Wraps the expression in a return statement or as an expression statement
 	 * 
+	 * @private
 	 * @param {string} expression The expression to generate code for
 	 * @param {execExpOptionsDefaults} options Expression options
 	 * @returns {string} Generated function code
@@ -160,6 +176,7 @@ export class execExpression {
 	/**
 	 * Generate key for expression cache.
 	 * 
+	 * @private
 	 * @param {string} expression The expression to generate code for
 	 * @param {execExpOptionsDefaults} options Expression options
 	 * @param {string} args Expression arguments
@@ -175,6 +192,7 @@ export class execExpression {
 	 * setScopes get built from mainScopes & their prototypes, filtered by scopeAllowed().
 	 * getScopes is the provided extraScopes.
 	 * 
+	 * @private
 	 * @param {Array<object>|Set<object>} mainScopes Main scopes
 	 * @param {Array<object>|Set<object>} extraScopes Extra scopes
 	 * @returns {{getScopes:Set<object>, setScopes:Set<object>}} Parsed scopes
@@ -188,6 +206,7 @@ export class execExpression {
 		return { getScopes:extraScopes, setScopes };
 	}
 	
+	/** @type {string[]} Default argument names passed to compiled expression functions */
 	static #expDefaultArguments = ['$sdProxy','$sdError'];
 	
 	/**
@@ -208,7 +227,7 @@ export class execExpression {
 		let globalObj = window, globalCatch = noopFn, unscopables = execExpProxyDefaults.unscopables, args = execExpression.#expDefaultArguments;
 		// If both globalsHide and throwGlobals are true, throw on global access
 		if(globalsHide && throwGlobals) globalCatch = execExpression.throwGlobalAccessError;
-		// If argument is provided, add it to unscopables
+		// If argument is provided, add it to unscopables so it doesn't shadow the expression proxy
 		if(argument?.length>0){ unscopables = { __proto__:null, [argument]:true }; args = args.concat(argument); }
 		// Turn mainScopes & extraScopes into getScopes & setScopes
 		let { getScopes, setScopes } = execExpression.#parseScopes(mainScopes,extraScopes);
@@ -226,25 +245,40 @@ export class execExpression {
 		// Generate final function code with expression
 		if(!genFn) {
 			let fnCode = execExpression.#generateCode(expression,options);
-			// Get constructor from functionProto or functionAsyncProto
+			// Get constructor from functionProto or functionAsyncProto (for async function support)
 			let fnc = useAsync ? functionAsyncProto.constructor : functionProto.constructor;
-			// Create new function & cache it
+			// Create new function & cache it for future reuse on the same source element
 			genFn = new fnc(args,fnCode);
 			if(cacheMap) cacheMap.set(fnKey,genFn);
 		}
-		// Error logging callback
+		// Error logging callback (DEV builds only - in production noopFn is used)
 		DEV: { logFnError = execExpression.#logExpError.bind(null,expression,genFn,proxyObj); }
-		// Create function using Function constructor with dynamic arguments
+		// Create function using Function constructor with dynamic arguments; $sdProxy = proxy, $sdError = logFnError
 		try{ runFn = genFn.bind(fnThis||proxy,proxy,logFnError); }
 		catch(err){ logFnError(err); }
-		// Return with extra info for debugging
+		// Return with extra info for debugging and subsequent execution
 		return { __proto__:null, result:null, firstScope:getScopes.values().next().value, runFn, logFnError, getScopes, setScopes, proxy, options };
 	}
 	
+	/**
+	 * Throw an error when an expression attempts to access a global variable. Never returns normally.
+	 * 
+	 * @param {string} key The global variable name that was accessed
+	 * @throws {Error} Always throws - this function has no return path
+	 */
 	static throwGlobalAccessError(key){
 		throw new Error("Expression tried to access a global variable: "+key);
 	}
 	
+	/**
+	 * Log expression error in DEV mode.
+	 * 
+	 * @private
+	 * @param {string} expression The expression that caused the error
+	 * @param {Function} genFn The generated function
+	 * @param {execExpProxyDefaults} proxyObj Proxy options state
+	 * @param {Error} error The error object
+	 */
 	static #logExpError(expression,genFn,proxyObj,error){
 		console.warn(`ScopeDom: Error on Expression: ${expression}\n`,error?.message,'\n',{ expression, error, genFn, proxyObj });
 	}
@@ -273,18 +307,18 @@ export class execExpression {
 }
 
 /**
- * ScopeDom Proxy for expression execution, used in with(proxy).
+ * Proxy handler that intercepts property operations to resolve scoped expression values.
  * 
- * This class implements the JavaScript Proxy handler for scope access during expression execution.
- * It intercepts property operations (has, get, set, etc.) to resolve values from scope chains.
- * The proxy works in conjunction with the `with` statement in the generated function to provide seamless scope variable access.
+ * The execExpressionProxy class is the JavaScript Proxy handler used during expression
+ * execution. It intercepts property operations (has, get, set) to map variable names
+ * like `count` to scope objects instead of hitting the global scope directly.
  * 
- * It handles:
- * - Property existence checks (has)
- * - Property value retrieval (get) with signal integration
- * - Property value setting (set) with signal integration
- * - Property descriptor operations
- * - Signal proxy auto-creation for reactive properties
+ * Ownership rule (reads vs writes), stated once:
+ * - READ traps (`get`/`has`/`getOwnPropertyDescriptor`/`ownKeys`) read `mainScopes` first, then the extra `getScopes` set.
+ * - WRITE traps (`set`/`defineProperty`/`deleteProperty`) write `setScopes` first, then fall back to `mainScopes`.
+ * 
+ * `mainScopes` is used for both reads and writes.
+ * `getScopes` is read-only (never written, deleted, or defined).
  * 
  * @class execExpressionProxy
  * @implements {ProxyHandler}
@@ -346,8 +380,8 @@ export class execExpressionProxy {
 	 * 3. Check getScopes with scopeUseOwn set (hasOwn vs in operator)
 	 * 4. Check mainScopes with in operator
 	 * 5. Check globalObj with globalCatch if needed
+	 * Then, if useSignalProxy && signalCtrl: auto-create a signal proxy on a main scope (write-on-read) and return it or the new value; finally return void 0 if nothing matched.
 	 * 
-	 * @param {execExpressionProxy} obj Proxy options/state
 	 * @param {string} prop Property name to get
 	 * @param {any} receiver The receiver object
 	 * @returns {any} Property value
@@ -520,10 +554,11 @@ export class execExpressionProxy {
 	 *    2a. Checks if the value or its descriptor is a signalInstance
 	 *    2b. If a configurable value isn't a signal and isn't primitive, it auto-creates a signal proxy for reactive access
 	 * 
+	 * @private
 	 * @param {execExpressionProxy} obj Proxy options/state
-	 * @param {object} target Target object
+	 * @param {object} target The scope object containing the property to resolve
 	 * @param {string} prop Property name
-	 * @param {any} [receiver=target] Receiver object
+	 * @param {any} [receiver=target] Receiver object (scope object)
 	 * @returns {any} Property value
 	 */
 	static #getResolve(obj,target,prop,receiver=target){
@@ -566,11 +601,12 @@ export class execExpressionProxy {
 	 * 2. If the setter or value is a signalInstance, delegates to the signal's set method
 	 * 3. Otherwise, uses Reflect.set for standard property setting
 	 * 
+	 * @private
 	 * @param {execExpressionProxy} obj Proxy options/state
-	 * @param {object} target Target object
+	 * @param {object} target The scope object to set the property on
 	 * @param {string} prop Property name
 	 * @param {any} value Property value
-	 * @param {any} [receiver=target] Receiver object
+	 * @param {any} [receiver=target] Receiver object (scope object)
 	 * @returns {boolean} True on success
 	 */
 	static #setResolve(obj,target,prop,value,receiver=target){

@@ -14,23 +14,34 @@ import { execExpression, execExpOptionsDefaults } from "../exec.js";
 import ScopeDom from "../../scopedom.js";
 
 /**
+ * Scope Expression - static helper class for executing and building expressions within
+ * the ScopeDom scope hierarchy.
+ * 
+ * Resolves all applicable scopes for an expression and either builds an executable function
+ * for later use or executes it immediately. Accumulates scopes from the scope hierarchy,
+ * additional scopes, and element controllers, then delegates to plugins for expression
+ * modification before passing the expression to execExpression for building or running.
  * 
  * @class scopeExpression
  */
 export class scopeExpression {
 	
 	/**
-	 * Execute an expression on the element with a list of scopes for context.
+	 * Execute an expression on an element controller with resolved scopes.
 	 * 
-	 * This method walks up the controller hierarchy to collect mainScopes, then collects
-	 * additional scopes from extraScopes and elementScopes while avoiding duplicates.
-	 * Then it either runs the expression immediately(run=true) or builds it for later execution(run=false).
+	 * This is the main entry point for both running an expression now (run=true) and building
+	 * a deferred expression for later execution (run=false). The build mode produces a result
+	 * object you can run later via runFn, while the run mode returns the same result object
+	 * with result already populated (a Promise if the expression is async).
 	 * 
-	 * @param {string} expression The expression to execute
-	 * @param {Array<object>|null} [extraScopes=null] Extra scopes to include [{},...]
-	 * @param {Array<object>|null} [elementScopes=null] Element scopes to include [[element,scopesArr],...]
-	 * @param {execExp.execExpOptions|object|null} [options=null] Execution options(run:true/false)
-	 * @returns {any} execExpression result object
+	 * @see {@link execExpResult} The result object structure (typedef defined in exec.js), shared by buildExp and runExp.
+	 * 
+	 * @param {scopeElementController} eCtrl The scope element controller for the expression
+	 * @param {string} expression The expression string to parse, resolve, and evaluate
+	 * @param {Array<object>|null} [extraScopes=null] Extra scope objects to include ({},...)
+	 * @param {Array<object>|null} [elementScopes=null] Element scopes to include ([[element,scopesArr],...])
+	 * @param {object|null} [options=null] Execution options (run, fnThis, hideDocument, globalsHide, useSignalProxy)
+	 * @returns {execExpResult} run=false produces a result object whose runFn you can call later; run=true runs it now and populates its .result, or a Promise if async.
 	 */
 	static prepareExpression(eCtrl,expression,extraScopes=null,elementScopes=null,options=null){
 		let instance = eCtrl.ctrl.ScopeDomInstance;
@@ -64,9 +75,14 @@ export class scopeExpression {
 	/**
 	 * Collect main scopes by walking up the controller hierarchy.
 	 * 
-	 * This method iterates from the current controller to its ancestors until an isolated controller is found or parentCtrl becomes null.
-	 * It also builds a set of prototype chains for deduplication purposes and returns scopeUseOwn(for hasOwnProperty checks) and otherScopes.
-	 * @returns {{mainScopes: Array<object>, scopeUseOwn: WeakSet, msProtoList: Set, otherScopes: Set}}
+	 * Iterates from the current controller to its ancestors until an isolated controller is found or parentCtrl becomes null,
+	 * pushing each controller's scope into mainScopes. Also builds msProtoList from all main scope prototype chains for deduplication.
+	 * Mutates the scopes object in-place.
+	 * 
+	 * @private
+	 * @param {scopeElementController} eCtrl Starting controller
+	 * @param {object} scopes Scope accumulator object with mainScopes, msProtoList, scopeUseOwn, otherScopes mutated in-place
+	 * @returns {void}
 	 */
 	static #iterateMainScopes(eCtrl,scopes){
 		let { mainScopes, msProtoList } = scopes;
@@ -80,8 +96,19 @@ export class scopeExpression {
 	/**
 	 * Accumulate additional scopes from extraScopes and elementScopes.
 	 * 
-	 * This method adds scopes to the shared set while avoiding duplicates against mainScope prototypes.
-	 * It also handles nested element controller scopes via cacheElementScopeCtrls.
+	 * Adds scope objects (and their prototype chains) to the otherScopes Set while avoiding duplicates
+	 * against mainScope prototypes. Handles nested element controller scopes via cacheElementScopeCtrls.
+	 * Also adds the element context ($this, $$, etc.) to otherScopes unless hideDocument is true.
+	 * The controller context ($update, $emit, $on, $signal, etc.) is added unconditionally instead.
+	 * 
+	 * @private
+	 * @param {scopeElementController} eCtrl Starting controller
+	 * @param {ScopeDom} instance The ScopeDom instance (for cacheElementScopeCtrls)
+	 * @param {object} scopes Scope accumulator object with scopeUseOwn, msProtoList, otherScopes mutated in-place
+	 * @param {Array<object>|null} extraScopes Extra scope objects to include
+	 * @param {Array<object>|null} elementScopes Arrays of element/scope pairs to include
+	 * @param {object} options Execution options (hideDocument flag)
+	 * @returns {void}
 	 */
 	static #iterateOtherScopes(eCtrl,instance,scopes,extraScopes,elementScopes,options){
 		let { scopeUseOwn, msProtoList, otherScopes } = scopes;
@@ -122,10 +149,23 @@ export class scopeExpression {
 	}
 	
 	/**
-	 * Resolve the source element for the expression, to use as WeakMap cache key.
+	 * Resolve the source element for the expression, used as the WeakMap cache key.
 	 * 
-	 * This method determines which element should be used as the source for the expression,
-	 * with fallback logic to find a node from cached extra scopes or defaulting to the current element.
+	 * Determines which element should be used as the source for the expression by applying
+	 * this fallback chain:
+	 * 1. If options.sourceElement is already set - skip (already resolved)
+	 * 2. Check elementSources cache - maps source elements to their associated nodes
+	 * 3. Check elementExtraScopes cache - finds the first HTMLElement in associated scope pairs
+	 * 4. If the resolved node is a text node - climb to its parentNode
+	 * 5. If nothing found - default to the controller's element
+	 * 
+	 * Mutates options.sourceElement in-place.
+	 * 
+	 * @private
+	 * @param {scopeElementController} eCtrl The scope element controller
+	 * @param {ScopeDom} instance The ScopeDom instance
+	 * @param {object} options Execution options mutated in-place with sourceElement
+	 * @returns {void}
 	 */
 	static #resolveSourceElement(eCtrl,instance,options){
 		if(options.sourceElement) return;
@@ -136,12 +176,35 @@ export class scopeExpression {
 		if(!options.sourceElement) options.sourceElement = element;
 	}
 	
+	/**
+	 * Identity check: whether a value is a DOM Node instance.
+	 * 
+	 * Used to find the source element when resolving sourceElement from a list of
+	 * extra scopes attached to an element. Extra scopes may be an array of
+	 * [node, scopes] pairs - this finds the first DOM Node in the array (typically the element itself).
+	 * 
+	 * @private
+	 * @param {any} e Value to test
+	 * @returns {boolean} True if e is a DOM Node instance
+	 */
 	static #findIsNode(e){ return e instanceof nodeProto.constructor; }
 	
 	/**
-	 * Finalise expression and call plugins.
+	 * Finalize the expression string by invoking plugin onExpression hooks.
 	 * 
-	 * This method finalizes the expression by calling plugins via onElementExpression hook.
+	 * Builds a pluginOnElementExpression info object containing the compiled scopes,
+	 * expression text, and options. Each plugin with an onExpression hook receives
+	 * this object and may mutate `expObj.expression` in-place to customize the
+	 * expression before it is compiled and executed. Returns the (possibly modified)
+	 * expression string for the caller to compile and run.
+	 * 
+	 * @private
+	 * @param {scopeElementController} eCtrl The element's scope controller
+	 * @param {ScopeDom} instance The ScopeDom instance
+	 * @param {object} scopes Object with mainScopes and otherScopes arrays
+	 * @param {string} expression The original expression text
+	 * @param {object} options Execution options
+	 * @returns {string} The finalized expression text (possibly modified by plugins)
 	 */
 	static #finaliseWithPlugins(eCtrl,instance,scopes,expression,options){
 		let expObj = { expression, options, mainScopes:scopes.mainScopes, otherScopes:scopes.otherScopes };

@@ -23,48 +23,60 @@ import { signalController } from "./controller.js";
 import { signalObserver } from "./observer.js";
 import { signalInstance, signalSymb } from "./instance.js";
 
-/** @type {WeakMap<object>} Maps proxy objects to their metadata. WeakMap[proxy->metadata] */
+/** @type {WeakMap<object, object>} Maps proxy objects to their metadata. WeakMap[proxy->metadata] */
 const spProxyMap = new WeakMap();
 
-/** @type {WeakMap<object>} Reverse mapping from original targets to their proxies. WeakMap[target->proxy] */
+/** @type {WeakMap<object, object>} Reverse mapping from original targets to their proxies. WeakMap[target->proxy] */
 const spTargetMap = new WeakMap();
 
 /**
- * Signal Proxy for deep reactivity for objects with automatic signal tracking.
+ * Signal Proxy - the proxy engine that enables infinitely-deep reactive data structures.
  * 
- * The signal proxy is what enables reactivity within expressions, for the reactive signal system.
+ * A signalProxy wraps a plain value with a Proxied getter/setter interceptor that
+ * automatically creates signalInstance for every property accessed, creating new
+ * nested signalProxy objects for nested structures without requiring manual declaration.
  * 
- * A signalProxy creates a proxy that automatically creates signalInstance and
- * signalProxy for every property accessed, enabling infinitely deep reactivity.
- * Each nested property becomes a signal that can be tracked and updated independently.
- * The proxy supports arrays, Maps, Sets, and other iterable collections with special
- * handling for their methods.
+ * Any non-primitive target wrapped by this engine nests infinitely deep:
+ * accessing a property auto-creates a signalInstance, plus a nested
+ * signalProxy for a non-primitive value - no manual declaration is required.
+ * The target is safely held with a WeakRef, so it can be garbage-collected if orphaned.
+ * 
+ * Collections receive special method wrapping - array mutations (`push`, `pop`, etc.)
+ * and Map/Set methods (`add`, `delete`, etc.) return the collection itself and
+ * trigger change notifications, so reactive DOM reactivity is automatic.
  * 
  * @class signalProxy
- * @see {@link signalController} - Signal Controller for managing signals and observers
- * @see {@link signalObserver} - Signal Observer for tracking signal dependencies
- * @see {@link signalInstance} - Signal Instance that represents a reactive signal value
+ * 
+ * @see {@link signalController} Signal Controller for managing signals and observers
+ * @see {@link signalObserver} Signal Observer for tracking signal dependencies
+ * @see {@link signalInstance} Signal Instance that represents a reactive signal value
  */
 export class signalProxy {
 	
 	/**
 	 * Constructs a new signalProxy.
 	 * 
-	 * @param {object} target - Object to proxy (must be an object, not a primitive)
-	 * @param {signalController} signalCtrl - The parent signal controller managing this proxy
-	 * @param {signalInstance} [targetSignal=null] - Pre-existing signal for the target; if none provided, a new one is created
-	 * @param {boolean} [useWeakRef=false] - Use WeakRef for memory-safe references (defaults to true for nested proxies)
+	 * @param {object} target Object to proxy (must be an object, not a primitive)
+	 * @param {signalController} signalCtrl The parent signal controller managing this proxy
+	 * @param {signalInstance} [targetSignal=null] Pre-existing signal for the target; if none provided, a new one is created
+	 * @param {boolean} [useWeakRef=false] Use WeakRef for memory-safe references; enabled explicitly for nested proxies
 	 * @returns {signalProxy} The created proxy, or the target if it's a primitive
 	 */
 	constructor(target,signalCtrl,targetSignal=null,useWeakRef=false){
+		// Dedup: if target already has a proxy, return existing one to avoid multiple proxies for same object
 		if(spProxyMap.has(target)) return target;
 		if(spTargetMap.has(target)){ let p=spTargetMap.get(target); if(p!==void 0 && spProxyMap.has(p)) return p; }
+		// Primitives are returned as-is (no proxy wrapping needed)
 		if(target!==Object(target)) return target;
+		// If no pre-existing signal, create one and start recording (so deps are tracked immediately)
 		if(!targetSignal){ targetSignal = new signalInstance(signalCtrl,target); targetSignal.record(); }
 		let obj = { __proto__:null, target, targetSignal, proxies:new Map(), signals:new Map(), signalCtrl, isIterable:Symbol.iterator in Object(target) };
+		// Function targets get their own signalProxyFn wrapper so they behave as both proxy and function
 		if(typeof target==='function') obj = Object.assign(function signalProxyFn(){},obj);
+		// Memory-safe: store target as a WeakRef so GC can collect if proxy is orphaned
 		if(useWeakRef && window.WeakRef) defineWeakRef(obj,'target');
 		let proxy = new Proxy(obj,signalProxy);
+		// Maintain both directions of identity: proxy→metadata and target→proxy (for dedup)
 		spProxyMap.set(proxy,obj);
 		spTargetMap.set(target,proxy);
 		return proxy;
@@ -75,9 +87,9 @@ export class signalProxy {
 	 * 
 	 * Checks if a property exists on the target, and cleans up stale signals & proxies.
 	 * 
-	 * @param {object} obj - The proxy object
-	 * @param {string} prop - Property name to check existence of
-	 * @returns {boolean} True if the property exists on the target, false otherwise
+	 * @param {object} obj The proxy object
+	 * @param {string} prop Property name to check existence of
+	 * @returns {boolean} True if the property exists on the target, false otherwise; false when the target was garbage-collected (only when the proxy was created using WeakRef)
 	 */
 	static has(obj,prop){
 		let { target, proxies, signals } = obj;
@@ -100,25 +112,32 @@ export class signalProxy {
 	 * 4. Ensure a signal exists for the property and update it if value changed
 	 * 5. For non-primitive values, create or return nested proxy
 	 * 
-	 * @param {object} obj - The proxy object
-	 * @param {string} prop - Property name being accessed
-	 * @param {object} [receiver] The receiver object (not used)
-	 * @returns {any} The property value or nested proxy; undefined if target was garbage collected
 	 * @see {@link _handleTypesGet} Type-specific handling for iterables/functions
 	 * @see {@link #proxyEnsureSignal} Signal creation/lookup logic
+	 * 
+	 * @param {object} obj The proxy object
+	 * @param {string} prop Property name being accessed
+	 * @param {object} [receiver] The receiver object (not used)
+	 * @returns {any} The property value or nested proxy; undefined when the target was garbage-collected (only when the proxy was created using WeakRef)
 	 */
 	static get(obj,prop,receiver){
 		let getValue, { target, targetSignal, proxies, signalCtrl } = obj;
 		if(!target) return void console.warn("ScopeDom signalProxy: get() called on proxy with gc'd target",{prop});
+		// Property doesn't exist yet: auto-create signal and return undefined (will be detected by expression proxy)
 		if(!signalProxy.has(obj,prop)) return void signalProxy.#proxyEnsureSignal(obj,prop,void 0).get();
+		// Retrieve value from target (try Reflect.get first, fallback to direct access)
 		try{ getValue = Reflect.get(target,prop,target); }catch(err){ getValue = target[prop]; }
+		// Type-aware handling: iterables (record access; wrap mutators/readers)
 		let returnNow; [ getValue, returnNow ] = signalProxy._handleTypesGet(obj,prop,getValue);
 		if(returnNow) return getValue;
+		// Track signal value; update if changed since last access
 		let isPrimitive = getValue!==Object(getValue);
 		let signal = signalProxy.#proxyEnsureSignal(obj,prop,getValue);
 		if(signal.get()!==getValue) signal.set(getValue);
+		// Non-primitive → primitive transition: delete stale nested proxy
 		if(isPrimitive && proxies.has(prop)) proxies.delete(prop);
 		if(isPrimitive) return getValue;
+		// Nested non-primitive: return cached nested proxy or create a new one (infinitely deep)
 		let proxy = proxies.get(prop);
 		if(proxy!==void 0) return proxy;
 		proxy = new signalProxy(getValue,signalCtrl,signal,true);
@@ -137,12 +156,13 @@ export class signalProxy {
 	 * 3. Delegate to `#handleTypesSet()` for type-specific handling (iterables)
 	 * 4. Set property on target and update signal with new value
 	 * 
-	 * @param {object} obj - The proxy object
-	 * @param {string} prop - Property name being set
-	 * @param {any} value - Value to assign to the property
-	 * @param {object} [receiver] The receiver object (not used)
-	 * @returns {boolean} True if the property was set successfully on target, false otherwise
 	 * @see {@link #handleTypesSet} Type-specific handling for iterables
+	 * 
+	 * @param {object} obj The proxy object
+	 * @param {string} prop Property name being set
+	 * @param {any} value Value to assign to the property
+	 * @param {object} [receiver] The receiver object (not used)
+	 * @returns {boolean} True if the property was set successfully on target, false otherwise; false when the target was garbage-collected (only when the proxy was created using WeakRef)
 	 */
 	static set(obj,prop,value,receiver){
 		let getValue, { target, targetSignal, proxies } = obj;
@@ -176,9 +196,9 @@ export class signalProxy {
 	 * - Methods that modify data (push, pop, add, delete, etc.)
 	 * - Methods that read data
 	 * 
-	 * @param {object} obj - The proxy object
-	 * @param {string} prop - Property name being accessed
-	 * @param {any} getValue - The current property value from the target
+	 * @param {object} obj The proxy object
+	 * @param {string} prop Property name being accessed
+	 * @param {any} getValue The current property value from the target
 	 * @returns {[any,boolean]} Tuple [ value (or wrapped function), true/false (return value instantly or not) ]
 	 */
 	static _handleTypesGet(obj,prop,getValue){
@@ -222,11 +242,33 @@ export class signalProxy {
 		return [ getValue, false ];
 	}
 	
+	/**
+	 * Runs a list of arguments through the apply trap, then fires `signal.updated()` (collection mutation).
+	 * 
+	 * @private
+	 * @param {object} target The object the method is applied to
+	 * @param {any} getValue The value backing the object (used as `obj.target` by the apply trap)
+	 * @param {signalInstance} targetSignal The signalInstance backing the object
+	 * @param {signalController} signalCtrl The parent signal controller
+	 * @param {...*} args The arguments the method is called with
+	 * @returns {any} The return value of the method
+	 */
 	static #getFnWrapperChange(target,getValue,targetSignal,signalCtrl,...args){
 		let result = signalProxy.apply({ target:getValue, targetSignal, signalCtrl },target,args);
 		return targetSignal.changed(), result;
 	}
 	
+	/**
+	 * Runs a list of arguments through the apply trap without firing `signal.updated()` (collection read).
+	 * 
+	 * @private
+	 * @param {object} target The object the method is applied to
+	 * @param {any} getValue The value backing the object (used as `obj.target` by the apply trap)
+	 * @param {signalInstance} targetSignal The signalInstance backing the object
+	 * @param {signalController} signalCtrl The parent signal controller
+	 * @param {...*} args The arguments the method is called with
+	 * @returns {any} The return value of the method
+	 */
 	static #getFnWrapperRecord(target,getValue,targetSignal,signalCtrl,...args){
 		return signalProxy.apply({ target:getValue, targetSignal, signalCtrl },target,args);
 	}
@@ -240,10 +282,11 @@ export class signalProxy {
 	 * 
 	 * This ensures reactive updates propagate to observers when collection indices are modified.
 	 * 
-	 * @param {object} obj - The proxy object
-	 * @param {string} prop - Property name being set
-	 * @param {any} getValue - Current property value from the target before assignment
-	 * @param {any} value - New value being assigned to the property
+	 * @private
+	 * @param {object} obj The proxy object
+	 * @param {string} prop Property name being set
+	 * @param {any} getValue Current property value from the target before assignment
+	 * @param {any} value New value being assigned to the property
 	 * @returns {any} The value to set on the target
 	 */
 	static #handleTypesSet(obj,prop,getValue,value){
@@ -264,8 +307,9 @@ export class signalProxy {
 	 * 
 	 * This method ensures that the target[prop] has an associated signal for dependency tracking.
 	 * 
-	 * @param {object} obj - The proxy object
-	 * @param {string} prop - Property name
+	 * @private
+	 * @param {object} obj The proxy object
+	 * @param {string} prop Property name
 	 * @param {any} [currentValue=undefined] Current property value from the target before assignment
 	 * @param {any} [newValue=currentValue] New value being assigned (defaults to currentValue)
 	 * @returns {signalInstance} The existing or newly created signal instance for this property
@@ -287,9 +331,9 @@ export class signalProxy {
 	 * 
 	 * Deletes the property from the target and cleans up associated signal and proxy.
 	 * 
-	 * @param {object} obj - The proxy object
-	 * @param {string} prop - Property name to delete from the target
-	 * @returns {boolean} True if the property was successfully deleted, false otherwise
+	 * @param {object} obj The proxy object
+	 * @param {string} prop Property name to delete from the target
+	 * @returns {boolean|undefined} True if the property was successfully deleted, false otherwise; undefined when the target was garbage-collected (only when the proxy was created using WeakRef)
 	 */
 	static deleteProperty(obj,prop){
 		let { target, proxies, signals } = obj;
@@ -303,10 +347,10 @@ export class signalProxy {
 	 * Creates a new instance by calling the target constructor with provided arguments,
 	 * then returns a signalProxy wrapping the newly created instance.
 	 * 
-	 * @param {object} obj - The proxy object
-	 * @param {any[]} argumentsList - Array of arguments to pass to the constructor
-	 * @param {Function} newTarget - The constructor function used with the `new` operator
-	 * @returns {signalProxy} A new signal proxy wrapping the created instance for further reactivity
+	 * @param {object} obj The proxy object
+	 * @param {any[]} argumentsList Array of arguments to pass to the constructor
+	 * @param {Function} newTarget The constructor function used with the `new` operator
+	 * @returns {signalProxy|undefined} A new signal proxy wrapping the created instance for further reactivity; undefined when the target was garbage-collected (only when the proxy was created using WeakRef)
 	 */
 	static construct(obj,argumentsList,newTarget){
 		let { target, targetSignal, signalCtrl } = obj;
@@ -320,10 +364,10 @@ export class signalProxy {
 	 * 
 	 * Applies the target function with given arguments and returns a signalProxy wrapping the result, or the raw result if primitive.
 	 * 
-	 * @param {object} obj - The proxy object
-	 * @param {any} thisArgument - The `this` value for the function call (may be a proxied object)
-	 * @param {any[]} argumentsList - Array of arguments to pass to the function
-	 * @returns {any} Either the raw function result if primitive, or a new signalProxy wrapping it for reactivity
+	 * @param {object} obj The proxy object
+	 * @param {any} thisArgument The `this` value for the function call (may be a proxied object)
+	 * @param {any[]} argumentsList Array of arguments to pass to the function
+	 * @returns {any} Either the raw function result if primitive, or a new signalProxy wrapping it for reactivity; undefined when the target was garbage-collected (only when the proxy was created using WeakRef)
 	 */
 	static apply(obj,thisArgument,argumentsList){
 		let { target, targetSignal, signalCtrl } = obj;
@@ -339,11 +383,14 @@ export class signalProxy {
 	/**
 	 * Proxy handler for `defineProperty` (defineProperty trap).
 	 * 
-	 * Defines a property on the target object using mtCacheDefineProperty.
+	 * Defines a property on the target object via `mtCacheDefineProperty(obj.target, prop, attributes)`.
+	 * This trap is an intentional pass-through to the raw target.
 	 * 
-	 * @param {object} obj - The proxy object
-	 * @param {string} prop - Property name to define on the target
-	 * @param {PropertyDescriptor} attributes - The property descriptor defining configurable, enumerable, get, set, value, etc.
+	 * TODO: getter & setter may bypass signalProxy.
+	 * 
+	 * @param {object} obj The proxy object
+	 * @param {string} prop Property name to define on the target
+	 * @param {PropertyDescriptor} attributes The property descriptor defining configurable, enumerable, get, set, value, etc.
 	 * @returns {boolean} True if the property was successfully defined on the target, false otherwise
 	 */
 	static defineProperty(obj,prop,attributes){ return mtCacheDefineProperty(obj.target,prop,attributes); }
@@ -351,10 +398,13 @@ export class signalProxy {
 	/**
 	 * Proxy handler for `getOwnPropertyDescriptor` (getOwnPropertyDescriptor trap).
 	 * 
-	 * Returns the property descriptor from the target object using mtCacheGetDefinedProperty.
+	 * Returns the property descriptor from the target object via `mtCacheGetDefinedProperty(obj.target, prop)`.
+	 * This trap is an intentional pass-through to the raw target.
 	 * 
-	 * @param {object} obj - The proxy object
-	 * @param {string} prop - Property name to get descriptor for
+	 * TODO: getter & setter may bypass signalProxy.
+	 * 
+	 * @param {object} obj The proxy object
+	 * @param {string} prop Property name to get descriptor for
 	 * @returns {PropertyDescriptor} The property descriptor from the target, or undefined if not found
 	 */
 	static getOwnPropertyDescriptor(obj,prop){ return mtCacheGetDefinedProperty(obj.target,prop); }
@@ -364,8 +414,8 @@ export class signalProxy {
 	 * 
 	 * Sets the prototype of the target object using Reflect.setPrototypeOf.
 	 * 
-	 * @param {object} obj - The proxy object
-	 * @param {object} prototype - The new prototype to set on the target
+	 * @param {object} obj The proxy object
+	 * @param {object} prototype The new prototype to set on the target
 	 * @returns {boolean} True if the prototype was successfully set, false otherwise
 	 */
 	static setPrototypeOf(obj,prototype){ return mtCacheSetPrototypeOf(obj.target,prototype); }
@@ -375,7 +425,7 @@ export class signalProxy {
 	 * 
 	 * Returns the prototype of the target object using Object.getPrototypeOf.
 	 * 
-	 * @param {object} obj - The proxy object
+	 * @param {object} obj The proxy object
 	 * @returns {object} The prototype of the target object
 	 */
 	static getPrototypeOf(obj){ return mtCacheGetPrototypeOf(obj.target); }
@@ -385,7 +435,7 @@ export class signalProxy {
 	 * 
 	 * Returns if the target object allows new properties to be added using Reflect.isExtensible.
 	 * 
-	 * @param {object} obj - The proxy object
+	 * @param {object} obj The proxy object
 	 * @returns {boolean} True if the target object is extensible (allows new properties), false otherwise
 	 */
 	static isExtensible(obj){ return Reflect.isExtensible(obj.target); }
@@ -395,25 +445,25 @@ export class signalProxy {
 	 * 
 	 * Returns all own property keys (including symbols) from the target using Reflect.ownKeys.
 	 * 
-	 * @param {object} obj - The proxy object
-	 * @returns {string[]} Array of own property keys from the target (property names and symbols)
+	 * @param {object} obj The proxy object
+	 * @returns {Array<string|symbol>} Array of own property keys from the target (property names and symbols)
 	 */
 	static ownKeys(obj){ return Reflect.ownKeys(obj.target); }
 	
 	/**
 	 * Proxy handler for `preventExtensions` (preventExtensions trap).
 	 * 
-	 * Prevents new properties from being added to the target using Reflect.preventExtensions.
+	 * Delegates to Reflect.preventExtensions on the target object.
 	 * 
-	 * @param {object} obj - The proxy object
-	 * @returns {boolean} True if the target was successfully made non-extensible, false otherwise
+	 * @param {object} obj The proxy object
+	 * @returns {boolean} Result of Reflect.preventExtensions on the target (always true in non-strict mode)
 	 */
 	static preventExtensions(obj){ return Reflect.preventExtensions(obj.target); }
 	
 	/**
 	 * Checks if a value is an existing signalProxy.
 	 * 
-	 * @param {object} target - Value to check
+	 * @param {object} target Value to check
 	 * @returns {boolean} True if the value is an existing signalProxy
 	 */
 	static _isProxy(target){ return spProxyMap.has(target); }
@@ -421,7 +471,7 @@ export class signalProxy {
 	/**
 	 * Gets the signalInstance associated with a signalProxy.
 	 * 
-	 * @param {signalProxy} proxy - The signalProxy
+	 * @param {signalProxy} proxy The signalProxy
 	 * @returns {signalInstance} The associated signalInstance, or undefined
 	 */
 	static _getProxySignal(proxy){ return spProxyMap.get(proxy)?.targetSignal; }
@@ -429,7 +479,7 @@ export class signalProxy {
 	/**
 	 * Gets the target for a signalProxy.
 	 * 
-	 * @param {signalProxy} proxy - The signalProxy
+	 * @param {signalProxy} proxy The signalProxy
 	 * @returns {object} The target object
 	 */
 	static _getProxyTarget(proxy){ return spProxyMap.get(proxy)?.target; }
@@ -437,7 +487,7 @@ export class signalProxy {
 	/**
 	 * Has a signalProxy for a target.
 	 * 
-	 * @param {object} target - The target object
+	 * @param {object} target The target object
 	 * @returns {boolean} True if the target has a signalProxy
 	 */
 	static _hasTargetProxy(target){ return spTargetMap.has(target); }
@@ -445,7 +495,7 @@ export class signalProxy {
 	/**
 	 * Gets the signalProxy for a target.
 	 * 
-	 * @param {object} target - The target object
+	 * @param {object} target The target object
 	 * @returns {signalProxy} The signalProxy
 	 */
 	static _getTargetProxy(target){ return spTargetMap.get(target); }
@@ -458,9 +508,9 @@ export class signalProxy {
 	 * 2. If value is a signalInstance, optionally record it on the observer, then either return it (strict mode) or get() its value
 	 * 3. In strict=false mode, after getting the signal instance's value, if that resolved to another proxy, extract its target
 	 * 
-	 * @param {any} value - The value to resolve (can be signalProxy, signalInstance, or any other type)
-	 * @param {signalObserver} [signalObs=null] - Optional observer to record the signal as a dependency during resolution
-	 * @param {boolean} [strict=false] - If true, only return signalInstance, otherwise returns null
+	 * @param {any} value The value to resolve (can be signalProxy, signalInstance, or any other type)
+	 * @param {signalObserver} [signalObs=null] Optional observer to record the signal as a dependency during resolution
+	 * @param {boolean} [strict=false] If true, only return signalInstance or null
 	 * @returns {any} The resolved value, either a signalInstance (strict=true), its underlying value, or the original non-signal value
 	 */
 	static _resolveSignal(value,signalObs=null,strict=false){

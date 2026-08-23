@@ -25,17 +25,18 @@ import ScopeDom from "../../scopedom.js";
 import { scopeExpression } from "./expression.js";
 
 
+/** @type {Symbol} Internal symbol for storing the scopeElementController on scopeElementContext instances. */
 const seSymb = Symbol('$scopeElementContext');
 
 /**
- * Expression context class for scope element controller operations.
- * Provides access to scope element controller methods and properties in expressions.
+ * Scope Element Context - provides DOM-tree-relative capabilities in expressions for
+ * a scope element controller.
  * 
- * This class exposes DOM-related capabilities including:
- * - Element references ($this, $parent, $previous, $next)
- * - Document access (document)
- * - Query selectors ($(query), $$(query))
- * - DOM event handling ($offDom, $onDom, $onceDom, $emitDom, $emitDomRAF)
+ * The scopeElementContext class exposes DOM access to expression code: properties and
+ * methods for navigating the DOM tree from within expressions, querying elements, and
+ * emitting DOM events. This is one of the two execContext classes: scopeElementContext
+ * (element-level) and scopeControllerContext (scope-level). The element context complements
+ * the controller context by providing DOM tree access rather than scope hierarchy access.
  * 
  * @class scopeElementContext
  */
@@ -50,42 +51,43 @@ export class scopeElementContext {
 	/**
 	 * Get this element.
 	 * 
-	 * @type {HTMLElement}
+	 * @returns {HTMLElement}
 	 */
 	get $this(){ return this[seSymb].element; };
 	
 	/**
 	 * Get the parent element (or host if in Shadow DOM).
 	 * 
-	 * @type {HTMLElement}
+	 * @returns {HTMLElement}
 	 */
 	get $parent(){ return (this[seSymb].element.parentNode instanceof ShadowRoot && this[seSymb].element.parentNode.host) ? this[seSymb].element.parentNode.host : this[seSymb].element.parentNode; };
 	
 	/**
 	 * Get the previous sibling element.
 	 * 
-	 * @type {HTMLElement}
+	 * @returns {HTMLElement}
 	 */
 	get $previous(){ return this[seSymb].element.previousElementSibling; };
 	
 	/**
 	 * Get the next sibling element.
 	 * 
-	 * @type {HTMLElement}
+	 * @returns {HTMLElement}
 	 */
 	get $next(){ return this[seSymb].element.nextElementSibling; };
 	
 	/**
 	 * Get the document this element belongs to.
 	 * 
-	 * @type {Document}
+	 * @returns {Document}
 	 */
 	get document(){ return this[seSymb].element.ownerDocument; };
 	
 	/**
-	 * Query selector on the document.
+	 * Query selector on the document (document-wide search).
+	 * 
 	 * @param {string} query CSS selector
-	 * @returns {HTMLElement|null} The matched element
+	 * @returns {HTMLElement|null} The matched element or null if no match found
 	 */
 	$(query){ return this[seSymb].element.ownerDocument.querySelector(query); };
 	
@@ -143,37 +145,57 @@ export class scopeElementContext {
 	 * Emit a DOM event on RAF (request animation frame) for this element.
 	 * 
 	 * This uses timing.onceAnimation() to deduplicate events by uniqueID, preventing multiple rapid emissions.
+	 * Default uniqueID is based on `this.$attribute` for per-element isolation.
 	 * 
 	 * @param {string} name Event name
 	 * @param {object} [detail=null] Event detail
 	 * @param {object} [options=null] Event options
 	 * @param {string} [uniqueID] Unique ID for onceRAF deduplication (default as $attribute or '$emitDomRAF:sec')
+	 * @returns {boolean} True if successfully scheduled via onceAnimation, False if it already exists
 	 */
 	$emitDomRAF(name,detail=null,options=null,uniqueID=this.$attribute||'$emitDomRAF:sec'){ return timing.onceAnimation(this[seSymb].element,uniqueID+':'+name,()=>this[seSymb].$emitDom(name,detail,options)); };
 	
 }
 
-/** @class scopeElementController */
+/**
+ * Scope Element Controller - the leaf node of the ScopeDom scope hierarchy, wrapping
+ * an HTMLElement with scope-aware expression execution.
+ * 
+ * A scopeElementController is the element-level half of the ScopeDom controller pattern.
+ * It provides a bridge between DOM operations and scope-level expression execution through
+ * these core associations:
+ * - element: The HTMLElement being controlled (for DOM manipulation, event listeners)
+ * - ctrl: The scopeController managing the scope hierarchy (root node for scope lookup)
+ * - scope: The scopeInstance bound to this element (for scope properties)
+ * - execContext: The scopeElementContext for DOM-relative expression access ($this, $parent)
+ * 
+ * The element controller delegates scope-level operations to the root scopeController (`ctrl`),
+ * while managing element-level operations itself (DOM events, DOM updates, expression
+ * execution). This separation mirrors the architectural split between the scope system
+ * (controllers) and the DOM system (elements).
+ * 
+ * @class scopeElementController
+ */
 export class scopeElementController {
 	
 	/**
 	 * @constructor
-	 * @param {HTMLElement} element The element
+	 * @param {HTMLElement} element The element the scopeElementController is bound to
 	 * @param {scopeBase|object|null|undefined} [scopeObj] Scope base object
 	 * @param {scopeController|scopeElementController|null|undefined} [scopeCtrl] The scopeController
 	 */
 	constructor(element,scopeObj=void 0,scopeCtrl=void 0){
 		if(!element) throw new Error("Missing element?");
 		if(scopeCtrl instanceof scopeElementController) scopeCtrl = scopeCtrl.ctrl;
-		/** @type {typeof HTMLElement} */
+		/** @type {HTMLElement} */
 		this.element = element;
-		/** @type {typeof scopeController} */
+		/** @type {scopeController} */
 		this.ctrl = !scopeObj && scopeCtrl ? scopeCtrl : new scopeController(scopeObj,scopeCtrl?.eventTarget,scopeCtrl);
-		/** @type {typeof scopeInstance} */
+		/** @type {scopeInstance} */
 		this.scope = this.ctrl.scope;
-		/** @type {typeof eventRegistry} */
+		/** @type {eventRegistry} */
 		this.eventRegistry = this.ctrl.eventRegistry;
-		/** @type {typeof scopeElementContext} */
+		/** @type {scopeElementContext} */
 		this.execContext = new scopeElementContext(this);
 		this.isDuringUpdateDom = false;
 	}
@@ -188,7 +210,7 @@ export class scopeElementController {
 	 * @param {string} expression The expression to execute
 	 * @param {Array<object>|null} [extraScopes=null] Extra scopes to include [{},...]
 	 * @param {Array<object>|null} [elementScopes=null] Element scopes to include [[element,scopesArr],...]
-	 * @param {execExp.execExpOptions|object|null} [fnOptions=null] Execution options (run:true/false)
+	 * @param {object|null} [fnOptions=null] Execution options (run:true/false)
 	 * @returns {any} execExpression result object
 	 */
 	execElementExpression(expression,extraScopes=null,elementScopes=null,fnOptions=null){
@@ -198,7 +220,9 @@ export class scopeElementController {
 	/**
 	 * Emit DOM update event for this element.
 	 * 
-	 * Only called by plugins - not yet used.
+	 * Batches the DOM update event via timing.onceAnimation (if not during RAF),
+	 * or via deferTask (if currently in RAF), to prevent re-entrant updates.
+	 * Fires before/after events for plugins to hook into the update lifecycle.
 	 * 
 	 * @param {string} [suffix] Optional suffix for custom update events
 	 * @param {boolean} [emitSelf=false] emit event on own element+children, or only children
@@ -213,6 +237,16 @@ export class scopeElementController {
 		else timing.onceAnimation(this.element,evt,emitUpdate,true);
 	}
 	
+	/**
+	 * Emit DOM update events (before/after) to this element's children.
+	 * 
+	 * Guards against re-entrant updates via `isDuringUpdateDom`. Called from `$emitDomUpdate`.
+	 * 
+	 * @private
+	 * @param {string} evt Event name
+	 * @param {any} u Unused, kept for bind signature
+	 * @param {boolean} emitSelf Emit on own element+children vs. only children
+	 */
 	#emitUpdate(evt,u,emitSelf){
 		if(this.isDuringUpdateDom) return; // Ignore DOM Update during DOM Update (for same element)
 		this.isDuringUpdateDom = true;
@@ -225,7 +259,8 @@ export class scopeElementController {
 	/**
 	 * Emit DOM update event to children.
 	 * 
-	 * Only called by plugins - not yet used.
+	 * Recursively dispatches a CustomEvent on all connected child elements,
+	 * called from `$emitDomUpdate` during the update lifecycle (before/after variants).
 	 * 
 	 * @param {string} name Event name
 	 * @param {object} [detail=null] Event detail
@@ -237,8 +272,18 @@ export class scopeElementController {
 		this.#emitChildren(this.element,emitSelf,name,detail,options);
 	}
 	
+	/**
+	 * Emit DOM event recursively to connected children.
+	 * 
+	 * Optional emitSelf dispatches on the root element itself.
+	 * Recurses into all connected childNodes (stop at template/SVG/ShadowRoot boundaries handled upstream).
+	 * 
+	 * @private
+	 */
 	#emitChildren(e,emitSelf,name,detail,options){
+		// Dispatch event on the root element itself if requested
 		if(emitSelf) this.ctrl.$emitTarget(e,name,detail,options);
+		// Recurse into direct childElements only
 		if(e?.childNodes?.length>0) for(let c of Array.from(e.childNodes)){
 			if(c.isConnected && c.parentNode===e) this.#emitChildren(c,true,name,detail,options);
 		}

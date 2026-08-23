@@ -25,11 +25,11 @@ import ScopeDom from "../../scopedom.js";
 
 
 /**
- * Wrapper/mixin class for scope instances.
+ * Scope Instance - wrapper/mixin class for scope objects that provides $scopeTop and
+ * $scopeParent getters for hierarchical scope navigation.
  * 
- * Provides $scopeTop and $scopeParent getters for scope hierarchy access.
- * This class handles the prototype switching logic: if scopeObj is a plain Object,
- * its prototype is changed to scopeBase; otherwise, this instance inherits from scopeObj.
+ * The scopeInstance class attaches scope navigation capabilities to scope objects,
+ * allowing them to access their topmost and parent scopes in the hierarchy.
  * 
  * @class scopeInstance
  */
@@ -59,10 +59,28 @@ export class scopeInstance {
 		return mainObj;
 	}
 	
+	/**
+	 * $scopeTop getter descriptor.
+	 * 
+	 * Walks up the controller hierarchy to find the topmost controller's scope object.
+	 * 
+	 * @private
+	 * @param {scopeController} scopeCtrl The scope controller
+	 * @returns {scopeInstance} The topmost scope object
+	 */
 	static #descScopeTopGetter(scopeCtrl){
 		return scopeCtrl?.topCtrl?.scope || scopeCtrl?.parentCtrl?.topCtrl?.scope || scopeCtrl?.parentCtrl?.scope || scopeCtrl?.scope;
 	}
 	
+	/**
+	 * $scopeParent getter descriptor.
+	 * 
+	 * Returns the immediate parent controller's scope (or self if no parent).
+	 * 
+	 * @private
+	 * @param {scopeController} scopeCtrl The scope controller
+	 * @returns {scopeInstance} The parent scope object
+	 */
 	static #descScopeParentGetter(scopeCtrl){
 		return scopeCtrl?.parentCtrl?.scope || scopeCtrl?.scope;
 	}
@@ -88,30 +106,39 @@ export class scopeBase {
 		$scope:{ __proto__:null, configurable:false, enumerable:false, get:scopeBase.#descThisGetter }
 	}); }
 	
+	/**
+	 * $scope self-reference getter descriptor.
+	 * 
+	 * Returns `this` - the scopeBase/scope object it is defined on (a circular self-reference).
+	 * 
+	 * @private
+	 */
 	static #descThisGetter(){ return this; }
 	
 }
 
+/** @type {Symbol} Internal symbol for storing the scope controller on scopeControllerContext instances. */
 const scSymb = Symbol('$scopeControllerContext');
 
 /**
  * Expression context class for scope controller operations.
  * 
  * Provides access to scope controller methods and properties in expressions.
+ * Complements scopeElementContext by providing scope hierarchy access (rather than DOM tree access) from within expressions.
  * 
  * @class scopeControllerContext
  */
 export class scopeControllerContext {
 	/**
 	 * @constructor
-	 * @param {scopeController} scopeCtrl - The scopeController instance
+	 * @param {scopeController} scopeCtrl The scopeController instance
 	 */
 	constructor(scopeCtrl){ this[scSymb]=scopeCtrl; }
 	
 	/**
-	 * Get the scopeInstance associated with this context.
+	 * Get the scopeInstance associated with this context, bound to the enclosing controller.
 	 * 
-	 * @type {scopeInstance}
+	 * @returns {scopeInstance} The scopeInstance bound to the enclosing controller
 	 */
 	get $scope(){ return this[scSymb].scope; };
 	
@@ -122,7 +149,6 @@ export class scopeControllerContext {
 	 * Plugins listen for this as well as signals.
 	 * 
 	 * @param {string} [suffix=''] Optional suffix for custom update events
-	 * @returns {boolean} Result of the event dispatch
 	 */
 	$update(suffix=''){ return this[scSymb].$emitScopeUpdate(suffix); };
 	
@@ -161,7 +187,7 @@ export class scopeControllerContext {
 	$once(name,listener,options={},returnRemove=false){ return this[scSymb].$once(name,listener,options,returnRemove); };
 	
 	/**
-	 * Emit a custom event on the scope event registry.
+	 * Emit a custom event on the scope's event target (dispatches CustomEvent).
 	 * 
 	 * @param {string} name Event name
 	 * @param {object} [detail=null] Event detail
@@ -179,7 +205,7 @@ export class scopeControllerContext {
 	 * @param {object} [detail=null] Event detail
 	 * @param {object} [options=null] Event options
 	 * @param {string} [uniqueID] Unique ID for onceRAF deduplication
-	 * @returns {void}
+	 * @returns {boolean} True if successfully registered via onceAnimation
 	 */
 	$emitRAF(name,detail=null,options=null,uniqueID=this.$attribute||'$emitRAF:scc'){
 		let scopeCtrl = this[scSymb];
@@ -190,6 +216,7 @@ export class scopeControllerContext {
 	 * Request an animation frame callback.
 	 * 
 	 * @param {Function} cb Callback function to execute on next animation frame
+	 * @returns {boolean} True if successfully scheduled via requestAnimation, False if it already exists
 	 */
 	$onRAF(cb){ return timing.requestAnimation(cb); };
 	
@@ -197,9 +224,11 @@ export class scopeControllerContext {
 	 * Add a one-time animation frame callback.
 	 * 
 	 * Deduplicates callbacks by uniqueID to prevent multiple executions.
+	 * Default uniqueID is based on `this.$attribute` for per-element isolation.
 	 * 
 	 * @param {Function} cb Callback function to execute on next animation frame
 	 * @param {string} [uniqueID] Unique ID for onceRAF deduplication
+	 * @returns {boolean} True if this is a fresh (first-time) registration, False if it already exists
 	 */
 	$onceRAF(cb,uniqueID=this.$attribute||'$onceRAF:scc'){ return timing.onceAnimation(this.$this||this[scSymb].scope,uniqueID,cb); };
 	
@@ -254,7 +283,9 @@ export class scopeControllerContext {
 	/**
 	 * Create a new signal instance & record it immediately to any recording signal observers.
 	 * 
-	 * @param {any} [value] Initial signal value
+	 * Note: This returns the signalInstance only (for in-scope use within controllers/HTML/DOM), while `scopeController.$signal` returns [getter, setter, signalInstance] (what dev-defined controllers receive).
+	 * 
+	 * @param {any} [value] Initial signal value (undefined if omitted)
 	 * @returns {signalInstance} The created signal instance
 	 */
 	$signal(value=void 0){ return this[scSymb].$createSignal(value); }
@@ -262,9 +293,12 @@ export class scopeControllerContext {
 }
 
 /**
- * The Main Scope Controller.
+ * The Main Scope Controller - root node and event mediator of the scope hierarchy.
  * 
- * This handles scope event registry, other controller references & etc.
+ * The scopeController class is the central controller that manages scope event
+ * dispatch, and parent-child relationships. Each scope controller owns a scope
+ * object (via scopeInstance) and a nested event registry, with the topmost controller
+ * in the hierarchy providing the global event target.
  * 
  * @class scopeController
  */
@@ -312,6 +346,14 @@ export class scopeController {
 		else timing.onceAnimation(this.scope,evt,emitUpdate,true);
 	}
 	
+	/**
+	 * Emit scope update events (before/after) on the scope event registry.
+	 * 
+	 * Guards against re-entrant updates via `isDuringUpdate`. Called from `$emitScopeUpdate`.
+	 * 
+	 * @private
+	 * @param {string} evt Event name
+	 */
 	#emitUpdate(evt){
 		if(this.isDuringUpdate) return;
 		this.isDuringUpdate = true;
@@ -378,7 +420,9 @@ export class scopeController {
 	}
 	
 	/**
-	 * Emit a custom event on the scope event registry.
+	 * Emit a custom event on the scopeController's EventTarget (dispatches CustomEvent).
+	 * 
+	 * Unlike $off/$on which use the eventRegistry, $emit directly dispatches via the underlying EventTarget.
 	 * 
 	 * @param {string} name Event name
 	 * @param {object} [detail=null] Event detail
@@ -510,7 +554,7 @@ export class scopeController {
 	/**
 	 * Create a signal proxy for an object.
 	 * 
-	 * All properties will be treated signals.
+	 * All properties will be treated as signals.
 	 * 
 	 * @param {any} value Object to proxy
 	 * @returns {Proxy} The created proxy
@@ -545,7 +589,7 @@ export class scopeController {
 	 * This prevents the recording of any signals during execution.
 	 * If this behaviour doesn't match what you need, try preventUpdates or isolateRecording & wrapRecorder.
 	 * 
-	 * @param {Function} fn Value to prevent observers for
+	 * @param {Function} fn Function whose signal observer recording should be prevented
 	 * @param {...*} [args] Additional arguments to pass to the function
 	 * @returns {any} Result of executed function
 	 */

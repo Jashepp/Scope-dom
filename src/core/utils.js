@@ -3,18 +3,38 @@ import {
 	timing,
 } from "./timing.js";
 
+/**
+ * Utility functions and prototypes for ScopeDom - lightweight, shared helpers for DOM
+ * operations, object manipulation, event listening, and type checking.
+ * 
+ * Provides the fundamental building blocks other core modules depend on:
+ * - Microtask deferral (resolvedPromise, originalDefer, noopFn)
+ * - Object API access (getPrototypeOf, setPrototypeOf, defineProperty, etc.)
+ * - DOM node + native prototype constants (for fast type-checking)
+ * - Event registry (eventRegistry): a three-level Map of listeners
+ * - Regex helpers, Set + WeakRef utilities
+ * - Attribute setting (setAttribute) with a fallback for invalid names
+ */
+
 const hasQueueMicrotask = typeof queueMicrotask==='function';
+/** Cached resolved Promise, reused to avoid repeated allocations. */
 export const resolvedPromise = Promise.resolve();
+/** Microtask deferral shim: `queueMicrotask` when available, else `.then` on a resolved Promise. */
 export const originalDefer = hasQueueMicrotask ? queueMicrotask : Promise.prototype.then.bind(resolvedPromise);
 
+/** A function that does nothing (returns undefined). */
 export function noopFn(){};
+/** An async function that does nothing (resolves without a value). */
 export async function noopAsyncFn(){};
 
 export const { getPrototypeOf, setPrototypeOf, getOwnPropertyDescriptor, defineProperty, hasOwn } = Object;
 
+/** Union of two sets (native `Set.prototype.union` when available). */
 export function setUnion(setA,setB){ return Set.prototype.union ? setA.union(setB) : new Set([...setA,...setB]); };
+/** Fallback support for Symbol.dispose */
 export const disposeSymbol = Symbol.dispose || Symbol.for('Symbol.dispose');
 
+/** Checks if the value is a Promise or thenable. */
 export function isPromise(value){ return value instanceof Promise || ('then' in Object(value) && typeof value?.then==="function"); };
 
 // regexUtils
@@ -39,10 +59,13 @@ export const functionProto = getPrototypeOf(noopFn);
 export const functionAsyncProto = getPrototypeOf(noopAsyncFn);
 export const nativeProtos = [objectProto,nodeProto,elementProto,functionProto,functionAsyncProto];
 export const nativeConstructors = nativeProtos.map(p=>p?.constructor);
+/** Checks if the value is one of the known native objects or prototypes. */
 export function isNative(obj){ return nativeProtos.indexOf(obj)!==-1 || nativeConstructors.indexOf(obj)!==-1; }
+/** Checks if an object is non-native (eg, a user-provided value). */
 export function scopeAllowed(obj){ return obj && !isNative(obj); }
 
 
+/** Proxies a property on `target` via a WeakRef; returns the target. */
 export const defineWeakRef = (target,prop,value=target[prop])=>{
 	if(!window.WeakRef) return target[prop]=value, target;
 	let ref = new WeakRef(value);
@@ -51,6 +74,7 @@ export const defineWeakRef = (target,prop,value=target[prop])=>{
 };
 
 const setAttributeElement = document.createElement('template');
+/** Sets an attribute, falling back to parsed HTML for names browsers would reject. */
 export function setAttribute(target,name,value){ // Set attribute with less name limitations
 	try{ target.setAttribute(name,value); }
 	catch(e){
@@ -61,12 +85,29 @@ export function setAttribute(target,name,value){ // Set attribute with less name
 }
 
 
+/**
+ * Event Registry - three-level Map structure for tracking event listeners.
+ * 
+ * Maintains a `Map<Target, Map<eventName, Map<listener, Set<options>>>>` structure
+ * with a parallel native `addEventListener`/`removeEventListener` registry.
+ * Allows granular listener removal by target, name, listener, and options combination.
+ * 
+ * @class eventRegistry
+ */
 export class eventRegistry {
 	
 	constructor(){
 		this.map = new Map();
 	}
 
+	/**
+	 * Add a listener to the event registry.
+	 * 
+	 * @param {EventTarget} target Target to add the listener to
+	 * @param {string} name Event name
+	 * @param {Function} listener Listener function
+	 * @param {object} [options={}] Event listener options
+	 */
 	add(target,name,listener,options={}){
 		let targetMap = this.map;
 		if(!targetMap.has(target)) targetMap.set(target,new Map());
@@ -79,6 +120,18 @@ export class eventRegistry {
 		target.addEventListener(name,listener,options);
 	}
 
+	/**
+	 * Remove a listener from the event registry.
+	 * 
+	 * If all arguments are provided, removes exactly that combination.
+	 * If name is null, removes all listeners on target.
+	 * If listener is null, removes all listeners for that name on target.
+	 * 
+	 * @param {EventTarget} target Target to remove from
+	 * @param {string|null} [name=null] Event name to match; null for all
+	 * @param {Function|null} [listener=null] Listener to match; null for all with name
+	 * @param {object|null} [options=null] Options to match; null for all with same listener
+	 */
 	remove(target,name=null,listener=null,options=null){
 		if(!this.map.has(target)) return;
 		let nameMap = this.map.get(target);
@@ -111,13 +164,41 @@ export class eventRegistry {
 
 let mtCacheWM = new WeakMap(), mtDeferring = false, mtDeferAgain = false;
 
+/**
+ * Microtask Cache - WeakMap-bounded memoization cache.
+ * 
+ * Stores computed values keyed by WeakMap reference + string key. Values are deferred
+ * cleaned up via a microtask.
+ * 
+ * Used by `mtCacheDefineProperty`, `mtCacheSetPrototypeOf`, and related helpers to cache
+ * property descriptors, prototypes, and other expensive per-property lookups.
+ * 
+ * @class microtaskCache
+ */
 export class microtaskCache {
 	
+	/**
+	 * Get a cached value, or return undefined if not present.
+	 * Sets `mtDeferAgain` flag if currently deferring cleanup to coalesce cleanup.
+	 * 
+	 * @param {object} wmKey WeakMap key (usually the target object)
+	 * @param {string} key Cache key within the inner Map
+	 * @returns {any} Cached value, or undefined if not cached
+	 */
 	static get(wmKey,key){
 		if(mtDeferring) mtDeferAgain = true;
 		return mtCacheWM.get(wmKey)?.get(key);
 	}
 	
+	/**
+	 * Get a cached value, or compute+cache it if not present.
+	 * Schedules deferred cleanup on first miss. Subsequent misses coalesce via `mtDeferAgain`.
+	 * 
+	 * @param {object} wmKey WeakMap key
+	 * @param {string} key Cache key
+	 * @param {Function} fn Function to compute the value
+	 * @returns {any} Cached or computed value
+	 */
 	static getOrCompute(wmKey,key,fn){
 		let innerMap, hasMap = mtCacheWM.has(wmKey);
 		if(!hasMap) mtCacheWM.set(wmKey,innerMap=new Map());
@@ -134,6 +215,14 @@ export class microtaskCache {
 		return value;
 	}
 	
+	/**
+	 * Set a cached value, scheduling deferred cleanup if first miss.
+	 * 
+	 * @param {object} wmKey WeakMap key
+	 * @param {string} key Cache key
+	 * @param {any} value Value to cache
+	 * @returns {any} The cached value
+	 */
 	static set(wmKey,key,value){
 		let innerMap, hasMap = mtCacheWM.has(wmKey);
 		if(!hasMap) mtCacheWM.set(wmKey,innerMap=new Map());
@@ -147,10 +236,25 @@ export class microtaskCache {
 		return value;
 	}
 	
+	/**
+	 * Remove a single key from the cache without triggering cleanup.
+	 * 
+	 * @param {object} wmKey WeakMap key
+	 * @param {string} key Cache key to delete
+	 * @returns {void}
+	 */
 	static delete(wmKey,key){
 		mtCacheWM.get(wmKey)?.delete(key);
 	}
 	
+	/**
+	 * Run deferred cleanup: drains the entire cache when no further deferrals are pending.
+	 * 
+	 * If `mtDeferAgain` is true, re-schedules itself immediately to handle additional coalesced writes.
+	 * Only when both `mtDeferring` and `mtDeferAgain` are false does it reset the WeakMap.
+	 * 
+	 * @private
+	 */
 	static #deferredCleanup(){
 		if(!mtDeferring) return;
 		if(mtDeferAgain){
@@ -165,13 +269,22 @@ export class microtaskCache {
 	
 }
 
-/** @type {typeof Object.getOwnPropertyDescriptor} */
+/**
+ * Microtask-Cached `Object.getOwnPropertyDescriptor` lookup.
+ * Drops the stale cache entry when the property is rewritten.
+ * 
+ * @returns {object|undefined} the property descriptor, or `undefined`
+ */
 export function mtCacheGetDefinedProperty(obj,prop){
 	let key = prop?.toString ? 'mtCachePropDesc:'+prop.toString() : prop;
 	return microtaskCache.getOrCompute(obj,key,getOwnPropertyDescriptor.bind(null,obj,prop));
 }
 
-/** @type {typeof Object.defineProperty} */
+/**
+ * Define the property, then drop the microtask-cached descriptor.
+ * 
+ * @returns the result of `Object.defineProperty`
+ */
 export function mtCacheDefineProperty(obj,prop,options){
 	let result = defineProperty(obj,prop,options);
 	let key = prop?.toString ? 'mtCachePropDesc:'+prop.toString() : prop;
@@ -179,12 +292,20 @@ export function mtCacheDefineProperty(obj,prop,options){
 	return result;
 }
 
-/** @type {typeof Object.getPrototypeOf} */
+/**
+ * Microtask-Cached `Object.getPrototypeOf` lookup.
+ * 
+ * @returns {Object|null} the object's prototype, or `null`
+ */
 export function mtCacheGetPrototypeOf(obj){
 	return microtaskCache.getOrCompute(obj,'mtCacheGetProto',getPrototypeOf.bind(null,obj));
 }
 
-/** @type {typeof Object.setPrototypeOf} */
+/**
+ * Set the object's prototype, then drop the microtask-cached lookup.
+ * 
+ * @returns {boolean} the result of `Object.setPrototypeOf`
+ */
 export function mtCacheSetPrototypeOf(obj,newProto){
 	let result = setPrototypeOf(obj,newProto);
 	microtaskCache.delete(obj,'mtCacheGetProto');

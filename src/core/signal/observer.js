@@ -24,33 +24,40 @@ import { signalInstance, signalSymb } from "./instance.js";
 import { signalProxy, resolveSignal } from "./proxy.js";
 
 /**
- * Signal Observer for tracking signal dependencies.
+ * Signal Observer - the dependency tracker of the reactive signal system.
  * 
- * The signal observer is the dependancy tracker of the reactive signal system.
+ * A signal observer records which signals it depends on when in "recording mode" and
+ * executes deferred registered listeners when any of those signals changes. Observers are
+ * the bridge between signal changes and reactive computation - a signal changing triggers
+ * the observer via {@link signalController.triggerChange}, and the observer's listeners
+ * (connected to computed signals) then re-evaluate the dependency graph.
  * 
- * This class implements:
- * - Recording mode to capture signal dependencies as they're accessed
- * - Change notifications for when a signal is updated
- * - WeakRef support for object values (memory-safe references)
- * 
- * @class signalObserver
- * @property {signalController} ctrl - The parent signal controller that manages this observer's lifecycle
- * @property {WeakSet<signalInstance>} signals - WeakSet of signals this observer depends on
- * @property {WeakSet<signalInstance>} signalsIgnore - WeakSet of signals to ignore during recording (e.g., the signal being computed)
- * @property {Array<Function>} listeners - Array of listener callbacks invoked when dependent signals change; each called with (observer, signal, oldValue, newValue)
- * @property {boolean} isDeferring - Change notification has been deferred and not yet executed
+ * The flags (`isDeferring`, `isChanging`) implement batching and re-entry prevention:
+ * - `isDeferring`: When true, a deferred notification is pending (via
+ *   {@link timing.deferTask}). Additional calls to `triggerChange` are dropped
+ *   to prevent duplicate executions.
+ * - `isChanging`: When true, listeners are currently executing; prevents re-entrant
+ *   recursion when a listener itself triggers a change.
  * 
  * @see {@link signalController} - Signal Controller for managing signals and observers
  * @see {@link signalInstance} - Signal Instance that represents a reactive signal value
  * @see {@link signalProxy} - Signal Proxy for deep reactivity for objects with automatic signal tracking
+ * 
+ * @property {signalController} ctrl - The parent signal controller that manages this observer's lifecycle and notification callbacks
+ * @property {WeakSet<signalInstance>} signals - WeakSet of signals this observer depends on (recorded during recording mode)
+ * @property {WeakSet<signalInstance>} signalsIgnore - WeakSet of signals to ignore during recording (eg, the signal being computed, to avoid self-dependency)
+ * @property {Array<Function>} listeners - Array of listener callbacks invoked when dependent signals change; each called with (observer, signal, oldValue, newValue)
+ * @property {boolean} isDeferring - Change notification has been deferred and not yet executed
+ * @property {boolean} isChanging - Change notification listeners are currently executing (prevents re-entrant recursion)
+ * @property {boolean} isRecording - Observer is currently in recording mode, tracking signal dependencies
+ * @class signalObserver
  */
 export class signalObserver {
 	
 	/**
 	 * Constructs a new signalObserver, with a reference to the parent signal controller.
 	 * 
-	 * @param {signalController} signalCtrl - The parent signal controller that manages this observer
-	 * @param {object} [options={}] - Observer options
+	 * @param {signalController} signalCtrl The parent signal controller that manages this observer
 	 */
 	constructor(signalCtrl,options={}){
 		// options = { __proto__:null, ...options };
@@ -66,7 +73,7 @@ export class signalObserver {
 	/**
 	 * Checks if the observer depends on a specific signal.
 	 * 
-	 * @param {signalInstance} signal - The signal to check
+	 * @param {signalInstance} signal The signal to check
 	 * @returns {boolean} True if the observer depends on the signal
 	 */
 	hasSignal(signal){ return this.signals.has(signal); }
@@ -74,10 +81,10 @@ export class signalObserver {
 	/**
 	 * Records a signal as a dependency of this observer.
 	 * 
-	 * Only records if the signal is not already in `signals` and not in `signalsIgnore`.
-	 * This prevents duplicate entries and respects ignored signals during recording mode.
+	 * Only records if the signal is not in `signalsIgnore`. Duplicate entries in `signals`
+	 * are prevented automatically by WeakSet's idempotent `add`, so no own-membership check is needed. This respects ignored signals during recording mode.
 	 * 
-	 * @param {signalInstance} signal - The signal to record as a dependency
+	 * @param {signalInstance} signal The signal to record as a dependency
 	 */
 	recordSignal(signal){
 		if(!this.signalsIgnore.has(signal)) this.signals.add(signal);
@@ -88,17 +95,15 @@ export class signalObserver {
 	 * 
 	 * Listeners are invoked with the arguments: signalObserver, signalInstance, old value, new value.
 	 * 
-	 * This method implements deferred execution (if enabled) for batching multiple changes together.
+	 * Notifications are always deferred via {@link timing.deferTask}, rather than fired synchronously, which lets multiple changes be batched together.
 	 * 
-	 * State flags used:
-	 * - `isDeferring`: If true, a deferred notification is pending; if false, notifications are immediate
-	 * - `isRecording`: If true, we're in recording mode and should not trigger changes
-	 * - `isChanging`: If true, listeners are currently executing; prevents re-entry
+	 * The `isDeferring`, `isRecording`, and `isChanging` flags below gate this call; see the class-level description for their full meaning.
 	 * 
-	 * @param {signalInstance} signal - The signal that changed
-	 * @param {any} oldValue - The previous value before the change
-	 * @param {any} newValue - The new value after the change
 	 * @see {@link #callObserverListeners}
+	 * 
+	 * @param {signalInstance} signal The signal that changed
+	 * @param {any} oldValue The previous value before the change
+	 * @param {any} newValue The new value after the change
 	 */
 	triggerChange(signal,oldValue,newValue){
 		if(this.isDeferring || this.isRecording || this.isChanging) return;
@@ -111,10 +116,12 @@ export class signalObserver {
 	 * 
 	 * Used internally by {@link triggerChange}
 	 * 
-	 * @param {signalInstance} signal - The signal that changed
-	 * @param {any} oldValue - The previous value before the change
-	 * @param {any} newValue - The new value after the change
-	 * @returns 
+	 * If `isChanging` is already true (a listener triggered another change) the run is skipped to prevent re-entrant recursion. Listener exceptions are caught and logged via console.error rather than propagated, since this runs inside a deferred {@link timing.deferTask}.
+	 * 
+	 * @private
+	 * @param {signalInstance} signal The signal that changed
+	 * @param {any} oldValue The previous value before the change
+	 * @param {any} newValue The new value after the change
 	 */
 	#callObserverListeners(signal,oldValue,newValue){
 		if(this.isChanging) return;
@@ -161,13 +168,23 @@ export class signalObserver {
 	 * then stops recording after execution completes. This ensures that any signals
 	 * accessed during the function's execution are properly captured as dependencies.
 	 * 
-	 * @param {Function} fn - Function to wrap in recording mode
+	 * @param {Function} fn Function to wrap in recording mode
 	 * @returns {Function} Wrapped function that starts/stops recording around execution
 	 */
 	wrapRecorder(fn){
 		return this.#signalObserverRecorder.bind(this,fn);
 	}
 	
+	/**
+	 * Run `fn` with recording mode started.
+	 * 
+	 * Starts recording before calling `fn`, stops after (if recording was actually started).
+	 * Catches and logs errors from `fn` to prevent recording state corruption.
+	 * 
+	 * @param {Function} fn Callback to execute in recording mode
+	 * @param {...*} args Arguments passed to `fn`
+	 * @returns {any} Result of `fn`
+	 */
 	#signalObserverRecorder(fn,...args){
 		let recording = this.startRecording();
 		let result; try{ result=fn(...args); }catch(err){ console.error(err); }
@@ -175,6 +192,23 @@ export class signalObserver {
 		return result;
 	}
 	
+	/**
+	 * Enables `using` keyword to automatically start/stop recording mode for a block of code.
+	 * 
+	 * Note: This is identical to {@link wrapRecorder}, without the function wrapper.
+	 * 
+	 * @example
+	 * {
+	 *   // Recording starts
+	 *   using _ = observer.recordingScope();
+	 *   // ... access/update signals
+	 *   // Recording stops
+	 * }
+	 * 
+	 * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/using
+	 * 
+	 * @returns {object} A disposable object exposing `[disposeSymbol]` (which stops recording), consumed by the `using` keyword
+	 */
 	recordingScope(){
 		this.startRecording();
 		return { [disposeSymbol]: this.stopRecording.bind(this) };
@@ -185,7 +219,7 @@ export class signalObserver {
 	 * 
 	 * Returns a cleanup function that can be called to remove this specific listener.
 	 * 
-	 * @param {Function} fn - Listener callback function (invoked as fn(observer, signal, oldValue, newValue))
+	 * @param {Function} fn Listener callback function (invoked as fn(observer, signal, oldValue, newValue))
 	 * @returns {Function} A cleanup function that removes the listener when called
 	 */
 	addListener(fn){
@@ -197,7 +231,7 @@ export class signalObserver {
 	/**
 	 * Removes a listener callback from the observer.
 	 * 
-	 * @param {Function} fn - Listener callback function to remove
+	 * @param {Function} fn Listener callback function to remove
 	 */
 	removeListener(fn){
 		let idx = this.listeners.indexOf(fn);

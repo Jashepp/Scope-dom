@@ -1,8 +1,23 @@
 "use strict";
+/** @typedef {import('../scopedom.js').default} ScopeDom */
 
+/** @type {number} DOM ELEMENT_NODE constant (1) - distinguishes element nodes from text/comment nodes */
 const elementNodeType = document.ELEMENT_NODE;
+/** @type {number} DOM TEXT_NODE constant (3) - distinguishes text nodes from element nodes */
 const textNodeType = document.TEXT_NODE;
+
+/** 
+ * @type {Function} Runtime-detected helper to check whether a text node contains non-empty visible content.
+ * Uses a trick: sets `tn.data=data`, reads `e.innerText` (which reflects visible-only text after browser trimming),
+ * then clears `tn.data`. Returns true if the text node would render visible content, false otherwise.
+ * Used by pluginParse to anchor FF-invisible text nodes with comment nodes.
+ */
 let isTextNodeSolid = null;
+
+/** 
+ * @type {boolean} Detected support for `Element.prototype.setHTML` (available in modern browsers).
+ * Used by pluginParse `:bind-html` option to choose between setHTML/innerHTML for content updates.
+ */
 let hasSetHTMLSupport = false;
 
 (()=>{
@@ -11,39 +26,83 @@ let hasSetHTMLSupport = false;
 	hasSetHTMLSupport = 'setHTML' in e && typeof e.setHTML==='function';
 })();
 
-let timing, resolveSignal, regexMatchAll, isElementLoaded, regexTest, setUnion;
+/** @type {any} Shared scopeDom.timing reference */
+let timing;
+/** @type {any} Shared scopeDom.resolveSignal reference */
+let resolveSignal;
+/** @type {any} Shared scopeDom.regexMatchAll reference */
+let regexMatchAll;
+/** @type {Function} Shared instance.isElementLoaded reference */
+let isElementLoaded;
+/** @type {any} Shared scopeDom.regexTest reference */
+let regexTest;
+/** @type {Function} Set union helper */
+let setUnion;
 
 /**
- * Plugin for parsing expressions within text nodes and attributes.
- * Supports features like text parsing, tree parsing, once-only execution,
- * and attribute binding (safe and HTML).
- *
+ * Plugin for parsing {{ expressions }} in text nodes, attributes, and bindings.
+ * Reads options from a single `parse` attribute and its `parse:*` sub-options.
+ * 
+ * The attribute and its $parse:* options:
+ *   $parse:text          parse expressions in text nodes (default: false)
+ *   $parse:tree          parse expressions in child and descendant elements (default: false)
+ *   $parse:once          execute each expression only once on first run (default: false)
+ *   $parse:update-scope  listen for scope `$emit` of the given event (default: '$update')
+ *   $parse:update-dom    listen for DOM `$emitDom` of the given event (default: '$update')
+ *   $parse:error         fallback text when an expression throws or evals null/undefined (default: '')
+ *   $parse:allow-dom     allow binding to an element DOM node (default: false)
+ *   $parse:visible       re-run when the element enters the viewport (default: false)
+ *   $parse:default-text  text shown while a Promise-expression is pending (default: '...')
+ *   $parse:safe          recursion guard: stops an expression binding a copy of its own text (default: false)
+ *   $parse:exclude       exclude this element's subtree from tree parsing (default: false)
+ *   $parse:exp           custom expression delimiter pattern (default: '{{exp}}')
+ *   $parse:attrib-<name> interpolate an attribute (e.g. :attrib-class), with an expression value, or no value to use existing
+ *   $parse:bind          auto-bind expression to `textContent` (default: false)
+ *   $parse:bind-html     auto-bind expression `innerHTML` (default: false)
+ * 
  * @class pluginParse
  */
 export class pluginParse {
 	
-	/**
-	 * @returns {string} The name of the plugin
-	*/
+	/** @returns {string} The name of the plugin */
 	get name(){ return 'parse'; }
 	static get name(){ return 'parse'; }
 	
-	#eventRemovalMap; #mutationObserverMap; #intersectionObserverMap;
-	#parseStateMap; #parsedTextNodesSet; #childExcludeTextSet; #expressionRegexCache;
+	/** @type {ScopeDom} ScopeDom class */
+	ScopeDom;
+	/** @type {ScopeDom} ScopeDom instance */
+	instance;
+	/** @type {WeakMap<HTMLElement, Set<Function>>} Per-element event removal callbacks */
+	#eventRemovalMap;
+	/** @type {WeakMap<HTMLElement, MutationObserver>} Per-element MutationObserver */
+	#mutationObserverMap;
+	/** @type {WeakMap<HTMLElement, IntersectionObserver>} Per-element IntersectionObserver */
+	#intersectionObserverMap;
+	/** @type {WeakMap<HTMLElement, object>} Per-element parse state */
+	#parseStateMap;
+	/** @type {WeakSet<textNode>} Set of already-parsed text nodes */
+	#parsedTextNodesSet;
+	/** @type {WeakSet<HTMLElement>} Set of child elements excluded from subtree scanning */
+	#childExcludeTextSet;
+	/** @type {Map<string, RegExp>} Cache for compiled custom delimiter regexes */
+	#expressionRegexCache;
 	
 	/**
-	 * @param {Object} ScopeDom - The ScopeDom class
-	 * @param {Object} instance - The ScopeDom instance
+	 * Initializes the pluginParse instance, captures shared references from ScopeDom, and sets up
+	 * module-level state tracking maps and per-element caches.
+	 * 
+	 * @param {object} ScopeDom The ScopeDom class reference
+	 * @param {object} instance The ScopeDom instance
 	*/
 	constructor(ScopeDom,instance){
 		this.ScopeDom = ScopeDom;
 		this.instance = instance;
-		this.#eventRemovalMap = new WeakMap(); // per element-set
-		this.#mutationObserverMap = new WeakMap(); // per element
-		this.#intersectionObserverMap = new WeakMap(); // per element
-		this.#parseStateMap = new WeakMap(); // per element
-		this.#parsedTextNodesSet = new WeakSet(); // only textNode
-		this.#childExcludeTextSet = new WeakSet(); // only child elements
+		this.#eventRemovalMap = new WeakMap();
+		this.#mutationObserverMap = new WeakMap();
+		this.#intersectionObserverMap = new WeakMap();
+		this.#parseStateMap = new WeakMap();
+		this.#parsedTextNodesSet = new WeakSet();
+		this.#childExcludeTextSet = new WeakSet();
 		this.#expressionRegexCache = new Map();
 		timing = ScopeDom.timing;
 		resolveSignal = ScopeDom.resolveSignal;
@@ -56,10 +115,10 @@ export class pluginParse {
 	/**
 	 * Called when the plugin is connected to an element.
 	 * Checks for the presence of the 'parse' attribute and sets up parsing.
-	 *
-	 * @param {Object} plugInfo - Information about the plugin connection
-	 * @param {HTMLElement} plugInfo.element - The element being connected
-	 * @param {Map<string, Object>} plugInfo.attribs - The ScopeDom parsed attributes of the element
+	 * 
+	 * @param {Object} plugInfo Information about the plugin connection
+	 * @param {HTMLElement} plugInfo.element The element being connected
+	 * @param {Map<string, Object>} plugInfo.attribs The ScopeDom parsed attributes of the element
 	*/
 	onConnect(plugInfo){
 		let { element, attribs } = plugInfo;
@@ -76,10 +135,10 @@ export class pluginParse {
 	/**
 	 * Called when the plugin is disconnected from an element.
 	 * Cleans up event listeners, observers, and restores original node/attribute states.
-	 *
-	 * @param {Object} plugInfo - Information about the plugin disconnection
-	 * @param {HTMLElement} plugInfo.element - The element being disconnected
-	 * @param {Map<string, Object>} plugInfo.attribs - The ScopeDom parsed attributes of the element
+	 * 
+	 * @param {Object} plugInfo Information about the plugin disconnection
+	 * @param {HTMLElement} plugInfo.element The element being disconnected
+	 * @param {Map<string, Object>} plugInfo.attribs The ScopeDom parsed attributes of the element
 	 */
 	onDisconnect(plugInfo){
 		let attrib, { element, attribs } = plugInfo;
@@ -118,18 +177,20 @@ export class pluginParse {
 		element.normalize();
 	}
 	
+	/** @type {RegExp} Default expression delimiter regex: matches `{{ expression }}` */
 	static #defaultExpRegex = /(\{\{(.*?)}})/g;
+	/** @type {RegExp} Escapes characters in expression strings for safe regex construction */
 	static #expEscapeRegex = /[|\\{}()[\]^$+*?.]/g;
 	
 	/**
 	 * Sets up the parsing configuration for an element based on its attributes.
 	 * Handles options like text parsing, tree parsing, once-only execution, attribute binding, and custom regex for expressions.
-	 *
-	 * @param {Object} plugInfo - Information about the plugin connection
-	 * @param {HTMLElement} plugInfo.element - The element being configured
-	 * @param {Object} plugInfo.elementScopeCtrl - The scope controller for the element
-	 * @param {Object} attrib - The ScopeDom parsed attributes object
+	 * 
 	 * @private
+	 * @param {Object} plugInfo Information about the plugin connection
+	 * @param {HTMLElement} plugInfo.element The element being configured
+	 * @param {Object} plugInfo.elementScopeCtrl The scope controller for the element
+	 * @param {Object} attrib The ScopeDom parsed attributes object
 	 */
 	#configureParse(plugInfo,attrib){
 		let { instance } = this;
@@ -146,7 +207,7 @@ export class pluginParse {
 		let allowDomResult = instance.elementAttribParseOption(element,attributeOptions,'allow dom',{ default:false, emptyTrue:true, runExp:true }); // $parse:allow-dom
 		let visibleOption = instance.elementAttribParseOption(element,attributeOptions,'visible',{ default:false, emptyTrue:true, runExp:true }); // $parse:visible
 		let defaultTextOption = instance.elementAttribParseOption(element,attributeOptions,'default text',{ default:'...', emptyTrue:false, runExp:true }); // $parse:default-text
-		let safeModeOption = instance.elementAttribParseOption(element,attributeOptions,'safe',{ default:false, emptyTrue:true, runExp:true }); // $parse:once
+		let safeModeOption = instance.elementAttribParseOption(element,attributeOptions,'safe',{ default:false, emptyTrue:true, runExp:true }); // $parse:safe
 		// Option: $parse:exclude
 		let excludeOption = instance.elementAttribParseOption(element,attributeOptions,'exclude',{ default:false, emptyTrue:true, runExp:true }); // $parse:exclude
 		if(excludeOption.value) this.#childExcludeTextSet.add(element);
@@ -247,8 +308,11 @@ export class pluginParse {
 	}
 	
 	/**
-	 * Disables the normalize method on elements.
-	 * Logs a warning when called to inform developers that normalize is disabled.
+	 * Noop replacement for `element.normalize` during parse use.
+	 * 
+	 * Installed on the element to disable the browser's native normalize, which
+	 * merges adjacent text nodes. Since pluginParse splits and reassembles text nodes
+	 * manually, native normalize would destroy the split structure. A warning is logged when called.
 	 * 
 	 * @private
 	 */
@@ -257,9 +321,9 @@ export class pluginParse {
 	/**
 	 * Sets up a MutationObserver to watch for changes in the element's subtree.
 	 * Useful for detecting added/removed nodes that might need parsing.
-	 *
-	 * @param {Object} state - The current parsing state for the element
+	 * 
 	 * @private
+	 * @param {Object} state The current parsing state for the element
 	 */
 	#initializeMutationObserver(state){
 		let { element, parseNodes, options } = state;
@@ -287,9 +351,9 @@ export class pluginParse {
 	
 	/**
 	 * Sets up an IntersectionObserver to trigger parsing when the element becomes visible.
-	 *
-	 * @param {Object} state - The current parsing state for the element
+	 * 
 	 * @private
+	 * @param {Object} state The current parsing state for the element
 	 */
 	#initializeIntersectionObserver(state){
 		let { element, options } = state;
@@ -311,9 +375,9 @@ export class pluginParse {
 	/**
 	 * Safely triggers a parsing pass.
 	 * It scans for new targets and runs expressions, ensuring that if nodes are pending (due to document loading), it schedules a follow-up check.
-	 *
-	 * @param {Object} state - The current parsing state
+	 * 
 	 * @private
+	 * @param {Object} state The current parsing state
 	 */
 	#safelyScanAndParse(state){
 		this.#discoverParseTargets(state);
@@ -327,10 +391,10 @@ export class pluginParse {
 	
 	/**
 	 * Registers an event removal function for an element.
-	 *
-	 * @param {HTMLElement} element - The element to track
-	 * @param {Function} removeEvent - The function to remove the event listener
+	 * 
 	 * @private
+	 * @param {HTMLElement} element The element to track
+	 * @param {Function} removeEvent The function to remove the event listener
 	 */
 	#registerEventRemoval(element,removeEvent){
 		if(!this.#eventRemovalMap.has(element)) this.#eventRemovalMap.set(element,new Set());
@@ -339,9 +403,9 @@ export class pluginParse {
 	
 	/**
 	 * Scans the element for targets and initiates the parsing process.
-	 *
-	 * @param {Object} state - The current parsing state
+	 * 
 	 * @private
+	 * @param {Object} state The current parsing state
 	 */
 	#discoverParseTargets(state){
 		let targetNodes = this.#locateParseTargets(state.element,state);
@@ -350,12 +414,12 @@ export class pluginParse {
 	
 	/**
 	 * Recursively finds elements and attributes that need parsing.
-	 *
-	 * @param {Node} targetNode - The target node to start searching from
-	 * @param {Object} state - The current parsing state
-	 * @param {boolean} [isRecursive=false] - Search child nodes recursively
-	 * @returns {Object} An object containing sets of nodes and attributes to be parsed
+	 * 
 	 * @private
+	 * @param {Node} targetNode The target node to start searching from
+	 * @param {Object} state The current parsing state
+	 * @param {boolean} [isRecursive=false] Search child nodes recursively
+	 * @returns {Object} An object containing sets of nodes and attributes to be parsed
 	 */
 	#locateParseTargets(targetNode,state,isRecursive=false){
 		let { parseNodes, attributeParseNames, attributeParseMap, options } = state;
@@ -426,13 +490,13 @@ export class pluginParse {
 	 * Matches expressions in a string using a regex pattern.
 	 * Extracts the outer expression (including delimiters) and inner expression (without delimiters).
 	 * 
-	 * @param {string} str - The string to search for expressions
-	 * @param {RegExp} regex - The regex pattern to match expressions
+	 * @private
+	 * @param {string} str The string to search for expressions
+	 * @param {RegExp} regex The regex pattern to match expressions
 	 * @returns {Array} An array of match objects, each containing:
 	 *   - expOuter: The full expression including delimiters
 	 *   - expInner: The expression content without delimiters
 	 *   - regexIndex: The starting index of the match in the string
-	 * @private
 	 */
 	#extractRegexMatches(str,regex){
 		let match, matches=[]; regex.lastIndex=0;
@@ -442,10 +506,10 @@ export class pluginParse {
 	
 	/**
 	 * Performs the actual parsing of the identified targets (text nodes and attributes).
-	 *
-	 * @param {Object} state - The current parsing state
-	 * @param {Object} targetNodes - The targets to be parsed (nodes and attributes)
+	 * 
 	 * @private
+	 * @param {Object} state The current parsing state
+	 * @param {Object} targetNodes The targets to be parsed (nodes and attributes)
 	 */
 	#parseTargets(state,targetNodes){
 		let { parseNodes, attributeParseMap, options } = state;
@@ -508,10 +572,10 @@ export class pluginParse {
 	/**
 	 * Reverts a parsed text node back to its original content.
 	 * Used during cleanup when the element is disconnected.
-	 *
-	 * @param {Object} state - The current parsing state
-	 * @param {Text} node - The text node to revert
+	 * 
 	 * @private
+	 * @param {Object} state The current parsing state
+	 * @param {Text} node The text node to revert
 	 */
 	#revertNodeParse(state,node){
 		let { parseNodes } = state;
@@ -531,10 +595,10 @@ export class pluginParse {
 	/**
 	 * Reverts a parsed attribute back to its original value.
 	 * Used during cleanup when the element is disconnected.
-	 *
-	 * @param {Object} state - The current parsing state
-	 * @param {string} name - The attribute name to revert
+	 * 
 	 * @private
+	 * @param {Object} state The current parsing state
+	 * @param {string} name The attribute name to revert
 	 */
 	#revertAttribParse(state,name){
 		let { element, attributeParseMap } = state;
@@ -550,10 +614,10 @@ export class pluginParse {
 	/**
 	 * Reverts a parsed binding back to its original content.
 	 * Used during cleanup when the element is disconnected.
-	 *
-	 * @param {Object} state - The current parsing state
-	 * @param {HTMLElement} element - The element to revert
+	 * 
 	 * @private
+	 * @param {Object} state The current parsing state
+	 * @param {HTMLElement} element The element to revert
 	 */
 	#revertBindParse(state,element){
 		let { safeBindOption, htmlBindOption } = state.options;
@@ -570,13 +634,13 @@ export class pluginParse {
 	/**
 	 * Executes an expression in the context of a node.
 	 * Creates a signal observer and wraps the run function for signal tracking.
-	 *
-	 * @param {HTMLElement} element - The root element for the expression context
-	 * @param {Text} node - The text node to execute the expression in
-	 * @param {string} exp - The expression to execute
-	 * @param {Object} signalObs - The signal observer to wrap the run function
-	 * @returns {Object} The execution result
+	 * 
 	 * @private
+	 * @param {HTMLElement} element The root element for the expression context
+	 * @param {Text} node The text node to execute the expression in
+	 * @param {string} exp The expression to execute
+	 * @param {Object} signalObs The signal observer to wrap the run function
+	 * @returns {Object} The execution result
 	 */
 	#executeExpression(element,node,exp,signalObs){
 		let eCtrl = this.instance.elementScopeCtrl(node);
@@ -587,38 +651,41 @@ export class pluginParse {
 	
 	/**
 	 * Executes the parsing logic for all identified text nodes, attributes, and bindings.
-	 *
-	 * @param {Object} state - The current parsing state
+	 * 
 	 * @private
+	 * @param {Object} state The current parsing state
 	 */
 	#runParseExpressions(state){
 		let { signalCtrl, element, parseNodes, attributeParseMap, isVisible, options } = state;
 		let { onlyOnceOption, safeBindOption, htmlBindOption, onVisibleOption } = options;
 		let self = this;
-		// Text Nodes
+		// Text Nodes - process each $parse:text node with signal observer for reactive updates
 		for(let [n,obj] of parseNodes){
 			let result, { node, exp, exec, signalObs, comment, updateIndex } = obj;
+			// Disconnected nodes: revert to original text and skip
 			if(!node.isConnected && !(comment && comment.isConnected)){ this.#revertNodeParse(state,node); continue; }
-			if(exec && onlyOnceOption) continue;
+			if(exec && onlyOnceOption) continue; // Skip already-executed nodes if :once option set
 			if(onVisibleOption && !isVisible){ if(updateIndex===0) result=options.defaultTextOption; else continue; }
 			else{
+				// Lazily create signal observer & expression on first run
 				if(!exec){
 					signalObs = obj.signalObs = signalCtrl.createObserver();
 					exec = obj.exec = this.#executeExpression(element,node,exp,signalObs);
 					signalObs.addListener(function parseTextNode_signalObserver(){
 						let updateIndex = obj.updateIndex;
 						timing.onceAnimation(node,signalObs,function parseTextNode_signalObserver_RAF(){
-							if(obj.updateIndex!==updateIndex) return;
-							signalObs.clearSignals();
+							if(obj.updateIndex!==updateIndex) return; // Ignore stale updates from previous wrapRecorder calls
+							signalObs.clearSignals(); // Clear stale dep tracks before re-recording
 							self.#updateTextNode(node,exec.runFn(),obj,state,updateIndex,signalObs);
 						});
 					});
 				}
+				// Execute immediately (not RAF-wrapped on first pass)
 				result = exec.runFn();
 			}
 			this.#updateTextNode(node,result,obj,state,updateIndex,signalObs);
 		}
-		// Element Attributes
+		// Element Attributes - same pattern as text nodes but for interpolated attribute values
 		for(let [node,attribMap] of attributeParseMap){
 			if(!node.isConnected){ for(let [name,obj] of attribMap){ this.#revertAttribParse(state,name); } continue; }
 			for(let [name,obj] of attribMap){
@@ -640,8 +707,9 @@ export class pluginParse {
 				this.#updateAttribute(node,name,exec.runFn(),obj,state,updateIndex,signalObs);
 			}
 		}
-		// Bind-Safe attribute
+		// Bind-Safe attribute - binds via textContent (safe, no HTML injection)
 		if(safeBindOption && safeBindOption.ready){
+			// Same signal-observer pattern: lazy-create, RAF-wrapped update, staleness check, signal clearing
 			for(let { exec, exp, signalObs, updateIndex } of [safeBindOption]){
 				if(exec && onlyOnceOption) continue;
 				if(onVisibleOption && !isVisible) continue;
@@ -660,8 +728,9 @@ export class pluginParse {
 				this.#updateBind(element,false,exec.runFn(),safeBindOption,state,updateIndex,signalObs);
 			}
 		}
-		// Bind-HTML attribute
+		// Bind-HTML attribute - mutually exclusive with Bind-Safe; binds via innerHTML (HTML injection allowed)
 		else if(htmlBindOption && htmlBindOption.ready){
+			// Same signal-observer pattern as bind-safe, but passes true (innerHTML) to #updateBind
 			for(let { exec, exp, signalObs, updateIndex } of [htmlBindOption]){
 				if(exec && onlyOnceOption) continue;
 				if(onVisibleOption && !isVisible) continue;
@@ -684,14 +753,14 @@ export class pluginParse {
 	
 	/**
 	 * Updates the content of a text node with the result of an expression.
-	 *
-	 * @param {Text} node - The text node to update
-	 * @param {any} result - The result of the expression execution
-	 * @param {Object} obj - The parsing object for this node
-	 * @param {Object} state - The current parsing state
-	 * @param {number} updateIndex - The current update iteration index
-	 * @param {Object} signalObs - The signal observer for tracking updates
+	 * 
 	 * @private
+	 * @param {Text} node The text node to update
+	 * @param {any} result The result of the expression execution
+	 * @param {Object} obj The parsing object for this node
+	 * @param {Object} state The current parsing state
+	 * @param {number} updateIndex The current update iteration index
+	 * @param {Object} signalObs The signal observer for tracking updates
 	 */
 	#updateTextNode(node,result,obj,state,updateIndex,signalObs){
 		let { options } = state;
@@ -741,15 +810,15 @@ export class pluginParse {
 	
 	/**
 	 * Updates an element's attribute with the result of an expression.
-	 *
-	 * @param {HTMLElement} element - The element to update
-	 * @param {string} attribute - The attribute name
-	 * @param {any} result - The result of the expression execution
-	 * @param {Object} obj - The parsing object for this attribute
-	 * @param {Object} state - The current parsing state
-	 * @param {number} updateIndex - The current update iteration index
-	 * @param {Object} signalObs - The signal observer for tracking updates
+	 * 
 	 * @private
+	 * @param {HTMLElement} element The element to update
+	 * @param {string} attribute The attribute name
+	 * @param {any} result The result of the expression execution
+	 * @param {Object} obj The parsing object for this attribute
+	 * @param {Object} state The current parsing state
+	 * @param {number} updateIndex The current update iteration index
+	 * @param {Object} signalObs The signal observer for tracking updates
 	 */
 	#updateAttribute(element,attribute,result,obj,state,updateIndex,signalObs){
 		let { options } = state;
@@ -771,15 +840,15 @@ export class pluginParse {
 	
 	/**
 	 * Updates an element's content (innerHTML or textContent) based on a binding.
-	 *
-	 * @param {HTMLElement} element - The element to update
-	 * @param {boolean} isHTML - If binding is for HTML content
-	 * @param {any} result - The result of the expression execution
-	 * @param {Object} obj - The parsing object for this binding
-	 * @param {Object} state - The current parsing state
-	 * @param {number} updateIndex - The current update iteration index
-	 * @param {Object} signalObs - The signal observer for tracking updates
+	 * 
 	 * @private
+	 * @param {HTMLElement} element The element to update
+	 * @param {boolean} isHTML If binding is for HTML content
+	 * @param {any} result The result of the expression execution
+	 * @param {Object} obj The parsing object for this binding
+	 * @param {Object} state The current parsing state
+	 * @param {number} updateIndex The current update iteration index
+	 * @param {Object} signalObs The signal observer for tracking updates
 	 */
 	#updateBind(element,isHTML,result,obj,state,updateIndex,signalObs){
 		let { options } = state;
@@ -829,5 +898,6 @@ export class pluginParse {
 	
 }
 
+/** Auto-register: prefer ScopeDom.pluginAdd, else fallback to the ScopeDomPlugins discovery object. */
 let win = typeof window!=='undefined' && window;
 if(win) win.ScopeDom?.pluginAdd?.(pluginParse) || ((win.ScopeDomPlugins=win.ScopeDomPlugins||{}).pluginParse=pluginParse);
