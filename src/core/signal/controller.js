@@ -90,7 +90,6 @@ export class signalController {
 	 * Observers are automatically registered with this controller so they receive change notifications.
 	 * 
 	 * @param {object} options Observer configuration options (see {@link signalObserver})
-	 * @param {boolean} [options.defer=false] Defer observer listener execution
 	 * @returns {signalObserver} The newly created signalObserver instance (also added to this controller's observers set)
 	 */
 	createObserver(options={}){ let o=new signalObserver(this,options); this.#observers.push(o); return o; }
@@ -140,7 +139,7 @@ export class signalController {
 	 * Triggers a change notification to all observers that have the given signal recorded.
 	 * 
 	 * When a signal changes value, it calls this method which then notifies all dependent observers via {@link signalObserver.triggerChange}.
-	 * Observers may execute immediately or defer based on their configuration.
+	 * Dependent observers always fire deferred via {@link timing.deferTask}; observers never run immediately or during the current task.
 	 * 
 	 * @param {signalInstance} signal The signal that changed
 	 * @param {any} oldValue The previous value before the change
@@ -414,7 +413,6 @@ export class signalController {
 	 * 
 	 * @param {Function} fn Callback function that computes the signal value
 	 * @param {object} [options={}] Compute options
-	 * @param {boolean} [options.defer=false] Defer computation
 	 * @param {signalInstance} [options.signal] Pre-existing signal to use
 	 * @returns {[signalInstance, signalObserver, Function]} Tuple of [signal, observer, clear function]
 	 * @throws {TypeError} If fn is not a function
@@ -455,7 +453,6 @@ export class signalController {
 	 * 
 	 * @param {Function} fn Callback function that computes the signal value
 	 * @param {object} [options={}] Compute options
-	 * @param {boolean} [options.defer=false] Defer computation
 	 * @param {signalInstance} [options.signal] Pre-existing signal to use
 	 * @returns {[signalInstance, signalObserver, Function]} Tuple of [signal, observer, clear function]
 	 * @throws {TypeError} If fn is not a function
@@ -634,7 +631,7 @@ export class signalController {
 	 * to their underlying values when needed in expressions or plugins.
 	 * 
 	 * @param {any} value The signalProxy or signalInstance value to resolve
-	 * @param {signalObserver|any} [signalObs=null] Optional signalObserver to check against
+	 * @param {signalObserver|any} [signalObs=null] Optional observer the resolved signal is recorded on as a dependency (via recordSignal) rather than merely checked against
 	 * @param {boolean} [strict=false] Strict mode: throw if value is not a signal
 	 * @returns {any} The resolved raw value (unwrapped from signalProxy/signalInstance)
 	 */

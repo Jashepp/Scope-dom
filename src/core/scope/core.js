@@ -216,7 +216,6 @@ export class scopeControllerContext {
 	 * Request an animation frame callback.
 	 * 
 	 * @param {Function} cb Callback function to execute on next animation frame
-	 * @returns {boolean} True if successfully scheduled via requestAnimation, False if it already exists
 	 */
 	$onRAF(cb){ return timing.requestAnimation(cb); };
 	

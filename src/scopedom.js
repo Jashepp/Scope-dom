@@ -182,7 +182,7 @@ let pluginsPostMain = null;
  * @property {Proxy|object|any} scope The proxy scope object
  * @property {ScopeDom} instance The ScopeDom instance
  * @property {scopeController} controller The scope controller
- * @property {typeof scopeController.prototype.$signal} signal Signal helper method
+ * @property {typeof signalController.prototype.signal} signal Signal helper method
  * @property {typeof signalController.prototype.createSignal} createSignal Create signal method
  * @property {typeof signalController.prototype.defineSignal} defineSignal Define signal method
  * @property {typeof signalController.prototype.assignSignals} assignSignals Assign signals method
@@ -191,6 +191,7 @@ let pluginsPostMain = null;
  * @property {typeof signalController.prototype.defineProxySignal} defineProxySignal Define proxy signal method
  * @property {typeof signalController.prototype.preventUpdates} preventUpdates Prevent updates method
  * @property {typeof signalController.prototype.preventObservers} preventObservers Prevent observers method
+ * @property {typeof signalController.prototype.resolveSignal} resolveSignal Resolve signal proxy/instance to a raw value method
  */
 
 /**
@@ -303,8 +304,8 @@ class ScopeDom {
 	 * Controllers can be named (for keyed access) or unnamed (the default controller).
 	 * 
 	 * @static
-	 * @param {Function|string|null} [name=null] Scope controller name (for keyed access). Can also pass a function directly as first argument as a shorthand.
-	 * @param {ScopeDomCtrlCallback} [fn=null] The controller function. Will be called during setup with a context object.
+	 * @param {Function|string|null} [name=null] Scope controller name (used with $scope-name). Can also pass a function directly as first argument as a shorthand.
+	 * @param {ScopeDomCtrlCallback} [fn=null] The controller function. The default controller is executed immediately. Named controllers run later, at element connection. A context object (see {@link ScopeDomCtrlCallbackObj}) is passed to it.
 	 * @returns {ScopeDom|undefined} The main ScopeDom instance (or nothing when the default controller is cleared)
 	 */
 	static controller(name=null,fn=null){
@@ -469,11 +470,23 @@ class ScopeDom {
 	// Scope Handling
 	
 	/**
-	 * Define scope controller.
+	 * Define a user/dev-defined scope controller, and run the default controller eagerly.
 	 * 
-	 * @param {Function|string|null} name Scope Controller Name
-	 * @param {ScopeDomCtrlCallback} fn Scope Controller Function
-	 * @returns {ScopeDom} ScopeDom instance
+	 * Two shapes are accepted:
+	 * - controller(fn) - shorthand for the default controller. A bare function as the first argument is treated as `fn`
+	 *   and its name becomes null.
+	 * - controller(name, fn) - a named controller, resolved later via the $scope-name attribute at element connection.
+	 *   The name may also be null/void/false, in which case the default controller is used.
+	 * 
+	 * The default controller runs immediately: it builds the execExpression proxy (with useSignalProxy = !!signalProxyAll,
+	 * so assignments on $scope route through the signal proxy set trap, see exec.js #setResolve), then calls `fn` via
+	 * {@link handleScopeCtrlFn} so that $scope is that proxy. A named controller is only registered into
+	 * namedControllers here and executed later, when its element connects.
+	 * Passing both name and fn as null/void disables and empties the default controller, returning void.
+	 * 
+	 * @param {Function|string|null} [name] Scope controller name (for keyed access). Pass a bare function as first argument for the default controller.
+	 * @param {ScopeDomCtrlCallback} [fn] The controller function. A context object (see {@link ScopeDomCtrlCallbackObj}) is passed to it.
+	 * @returns {ScopeDom|undefined} The ScopeDom instance, or void when disabling the default controller
 	 * @throws {Error} If arguments are incorrect, or if the named controller already exists
 	 */
 	controller(name=null,fn=null){
@@ -520,7 +533,7 @@ class ScopeDom {
 	/**
 	 * Handle scope controller function execution.
 	 * 
-	 * An object is passed as the only function argument, with scope (Proxy), instance, controller, and most signal helper methods.
+	 * Invokes `fn` with a single argument object: `scope` is the execExpression proxy (assignments on $scope therefore route through the signal proxy set trap, see exec.js #setResolve), along with `instance`, `controller`, and the signal-helper methods from {@link #scopeCtrlFnArgs} (signal, createSignal, defineSignal, assignSignals, computeSignal, proxySignal, defineProxySignal, preventUpdates, preventObservers, resolveSignal) bound to the signal controller.
 	 * 
 	 * @param {Proxy|object} proxy The proxy object for scope access
 	 * @param {ScopeDomCtrlCallback} fn The controller function to execute

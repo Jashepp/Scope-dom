@@ -243,7 +243,7 @@ export class signalProxy {
 	}
 	
 	/**
-	 * Runs a list of arguments through the apply trap, then fires `signal.updated()` (collection mutation).
+	 * Runs a list of arguments through the apply trap, then fires `signal.changed()` (collection mutation).
 	 * 
 	 * @private
 	 * @param {object} target The object the method is applied to
@@ -259,7 +259,7 @@ export class signalProxy {
 	}
 	
 	/**
-	 * Runs a list of arguments through the apply trap without firing `signal.updated()` (collection read).
+	 * Runs a list of arguments through the apply trap without firing `signal.changed()` (collection read).
 	 * 
 	 * @private
 	 * @param {object} target The object the method is applied to
